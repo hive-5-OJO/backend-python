@@ -1,4 +1,4 @@
-name: FastAPI CI
+name: FastAPI CI/CD
 
 on:
   push:
@@ -25,3 +25,16 @@ jobs:
           context: .
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/ojo-analytics:latest
+      
+      - name: Deploy to python_server(EC2)
+        uses: appleboy/ssh-action@master
+        id: deploy
+        with:
+          host: ${{ secrets.HOST }}
+          username: ubuntu
+          key: ${{ secrets.KEY }}
+          script: |
+              cd /home/ubuntu/project           
+              docker-compose pull               
+              docker-compose up -d analytics      
+              docker image prune -f

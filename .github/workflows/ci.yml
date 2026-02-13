@@ -35,6 +35,6 @@ jobs:
           key: ${{ secrets.KEY }}
           script: |
               cd /home/ubuntu/project           
-              docker-compose pull               
+              docker-compose pull analytics              
               docker-compose up -d analytics      
               docker image prune -f

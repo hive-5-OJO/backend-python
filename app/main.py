@@ -6,7 +6,7 @@ import os
 import sys
 import io
 
-# 우리가 만든 database.py 파일에서 engine 불러오기
+# database.py 파일에서 engine 불러오기
 from database import engine
 
 # 윈도우 터미널 한글 깨짐 방지 설정
@@ -15,9 +15,7 @@ sys.stderr = io.TextIOWrapper(sys.stderr.detach(), encoding='utf-8')
 
 app = FastAPI(title="High-5 Data Analysis Batch Server (Integrated & Ranked)")
 
-# ==========================================
-# [함수 1] 파일 자동 검색 및 로드 로직
-# ==========================================
+# 1. 파일 자동 검색 및 로드 로직
 def find_csv_file(base_path, filename):
     for root, dirs, files in os.walk(base_path):
         if filename in files:
@@ -66,9 +64,8 @@ def load_real_data():
     print("모든 CSV 파일을 성공적으로 로드했습니다.")
     return dfs
 
-# ==========================================
-# [함수 2] 배치 분석 엔진 (RFM 순위 + 대시보드 KPI 요약 -> DB 저장)
-# ==========================================
+
+# 2. 배치 분석 엔진 (RFM 순위 + 대시보드 KPI 요약 -> DB 저장)
 def perform_full_analysis_and_save():
     print("\n[배치 실행] 데이터 분석 및 DB 저장을 시작합니다...")
     dfs = load_real_data()
@@ -86,9 +83,8 @@ def perform_full_analysis_and_save():
     
     today = pd.to_datetime('2026-02-14') # 분석 기준일 설정
     
-    # ----------------------------------------------------
-    # [파트 A] 개별 고객 상세 분석 (RFM 세부 랭킹 & LTV, 코호트)
-    # ----------------------------------------------------
+    # 1-A 개별 고객 상세 분석 (RFM 세부 랭킹 & LTV, 코호트)
+
     # 날짜 데이터 변환
     df_m['created_at_dt'] = pd.to_datetime(df_m['created_at'], errors='coerce')
     df_a['start_at_dt'] = pd.to_datetime(df_a['start_at'], errors='coerce')
@@ -104,14 +100,14 @@ def perform_full_analysis_and_save():
     rfm = rfm.merge(frequency, on='member_id', how='left')
     rfm = rfm.merge(monetary, on='member_id', how='left').fillna(0)
     
-    # ★ 수정된 부분: 백분위수 기반의 정밀한 스코어링 및 등수 매기기
+    # 백분위수 기반의 정밀한 스코어링 및 등수 매기기
     # R(최근성)은 숫자가 작을수록 좋음 (ascending=False)
     rfm['R_pct'] = rfm['R'].rank(ascending=False, pct=True) * 100
     # F(빈도), M(금액)은 숫자가 클수록 좋음 (ascending=True)
     rfm['F_pct'] = rfm['F'].rank(ascending=True, pct=True) * 100
     rfm['M_pct'] = rfm['M'].rank(ascending=True, pct=True) * 100
     
-    # 가중치 부여 (R 20%, F 30%, M 50% 적용)
+    # 가중치 부여 (R 20%, F 30%, M 50% 적용. 추후 수정 가능)
     rfm['exact_score'] = (rfm['R_pct'] * 0.2) + (rfm['F_pct'] * 0.3) + (rfm['M_pct'] * 0.5)
     
     # 등수(Rank) 및 상위 퍼센트(%) 계산 (method='first'로 동점자 방지)
@@ -134,10 +130,8 @@ def perform_full_analysis_and_save():
     cohort_pivot = cohort_data.pivot(index='SignupMonth', columns='CohortIndex', values='member_id')
     cohort_size = cohort_pivot.iloc[:, 0]
     retention = (cohort_pivot.divide(cohort_size, axis=0).round(3) * 100).fillna(0).reset_index()
-    
-    # ----------------------------------------------------
-    # [파트 B] 대시보드용 KPI 통계 분석
-    # ----------------------------------------------------
+
+    # 1-B 대시보드용 KPI 통계 분석
     top_plans = df_id[df_id['product_type'] == 'SUBSCRIPTION'].groupby('product_name_snapshot')['total_price'].sum().reset_index()
     top_plans = top_plans.sort_values(by='total_price', ascending=False).head(5)
     top_plans.columns = ['plan_name', 'total_revenue']
@@ -169,9 +163,8 @@ def perform_full_analysis_and_save():
     ]
     df_summary = pd.DataFrame(summary_data)
 
-    # ----------------------------------------------------
-    # [파트 C] DB에 모든 데이터 저장하기
-    # ----------------------------------------------------
+
+    # 1-C DB에 모든 데이터 저장하기
     rfm.drop(columns=['created_at_dt'], inplace=True, errors='ignore')
     rfm['created_at'] = rfm['created_at'].astype(str)
     retention['SignupMonth'] = retention['SignupMonth'].astype(str)
@@ -188,9 +181,7 @@ def perform_full_analysis_and_save():
     
     print("[배치 완료] 상세 데이터 및 KPI 통계가 모두 DB에 성공적으로 저장되었습니다.")
 
-# ==========================================
 # [API 엔드포인트]
-# ==========================================
 
 @app.post("/api/analysis/trigger-batch")
 async def trigger_analysis(background_tasks: BackgroundTasks):

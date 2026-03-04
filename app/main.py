@@ -3,6 +3,7 @@ import pandas as pd
 from database import ojo_engine, analysis_engine
 from analyzer.ltv_analyzer import calculate_ltv
 from analyzer.cohort_analyzer import calculate_cohort
+from analyzer.subscription_analyzer import calculate_subscription
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -20,6 +21,11 @@ def run_analysis_pipeline():
         ltv_df.to_sql('ltv_snapshot', con=analysis_engine, if_exists='replace', index=False)
     if not cohort_df.empty:
         cohort_df.to_sql('cohort_snapshot', con=analysis_engine, if_exists='replace', index=False)
+    
+    # 요금제별 이탈률 스냅샷 저장    
+    sub_result = calculate_subscription(ojo_engine)
+    if not sub_result['product_churn'].empty:
+        sub_result['product_churn'].to_sql('churn_snapshot', con=analysis_engine, if_exists='replace', index=False)    
     
     print("✅ 분석 결과 적재 완료 (ojo_analysis)")
 
@@ -47,6 +53,23 @@ def get_dashboard():
     # Spring이 계산해서 ojo DB에 넣어둔 KPI 테이블들을 읽어옴
     summary = pd.read_sql("SELECT * FROM kpi_summary_metrics", con=ojo_engine)
     return {"status": "success", "data": summary.to_dict(orient='records')}
+
+@app.get("/api/analysis/churn")
+async def get_subscription():
+    result = calculate_subscription(ojo_engine)
+    
+    # 날짜 포맷팅 (Series가 비어있지 않을 때만 수행)
+    if not result['conversions'].empty:
+        result['conversions']['start_month'] = result['conversions']['start_month'].astype(str)
+    
+    return {
+        "status": "SUCCESS",
+        "data": {
+            "conversions": result['conversions'].to_dict(orient='records'),
+            "product_churn": result['product_churn'].to_dict(orient='records'),
+            "top_reasons": result['top_reasons'].to_dict(orient='records')
+        }
+    }
 
 if __name__ == "__main__":
     import uvicorn

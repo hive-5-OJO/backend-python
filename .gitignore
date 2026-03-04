@@ -1,20 +1,16 @@
 .env
 
-
 venv/
 env/
 .venv/
-
 
 __pycache__/
 *.pyc
 *.pyo
 
-
 *.db
 *.sqlite
 *.sqlite3
-
 
 .DS_Store
 Thumbs.db

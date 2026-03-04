@@ -15,9 +15,8 @@ def calculate_cohort(ojo_engine):
     df['join_month'] = df['join_date'].dt.to_period('M')
     df['order_month'] = df['order_date'].dt.to_period('M')
 
-    # 2. 코호트 그룹핑 (가입월과 첫 구매 이후 경과 달수)
-    df['cohort_index'] = (df['order_month'].view(dtype='int64') - 
-                         df['join_month'].view(dtype='int64'))
+    # 두 기간의 차이를 구한 뒤, '정수형'으로 추출합니다.
+    df['cohort_index'] = (df['order_month'] - df['join_month']).apply(lambda x: x.n)
 
     cohort_data = df.groupby(['join_month', 'cohort_index'])['member_id'].nunique().reset_index()
     cohort_pivot = cohort_data.pivot(index='join_month', columns='cohort_index', values='member_id')

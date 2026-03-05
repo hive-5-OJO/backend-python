@@ -36,7 +36,7 @@ def calculate_subscription(ojo_engine):
     # 요금제 이탈률
     product_stats = df.groupby('product_name').agg(
         total_subs=('status', 'count'),
-        churn_count=('status', lambda x: (x == 'CANCLED').sum())
+        churn_count=('status', lambda x: (x == 'CANCELED').sum())
     )
 
     product_stats['specific_churn_rate'] = (

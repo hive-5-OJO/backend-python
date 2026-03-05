@@ -20,7 +20,7 @@ def calculate_subscription(ojo_engine):
     if df.empty: return pd.DataFrame()
     
     df['started_at'] = pd.to_datetime(df['started_at'])
-    df['start_month'] = df['started_at'].dt.to_period('M')
+    df['start_month'] = df['started_at'].dt.strftime('%Y%m')
     
     # 요금제 전환율
     df['prev_product_id'] = df.groupby('member_id')['product_id'].shift(1)

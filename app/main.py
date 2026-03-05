@@ -25,8 +25,15 @@ def run_analysis_pipeline():
     
     # 요금제별 이탈률 스냅샷 저장    
     sub_result = calculate_subscription(ojo_engine)
-    if not sub_result['product_churn'].empty:
-        sub_result['product_churn'].to_sql('churn_snapshot', con=analysis_engine, if_exists='replace', index=False)    
+
+    if isinstance(sub_result, dict):
+        if not sub_result['conversions'].empty:
+            sub_result['conversions'].to_sql('conversion_snapshot', con=analysis_engine, if_exists='replace', index=False) 
+        if not sub_result['product_churn'].empty:
+            sub_result['product_churn'].to_sql('churn_snapshot', con=analysis_engine, if_exists='replace', index=False) 
+        if not sub_result['top_reasons'].empty:
+            sub_result['top_reasons'].to_sql('reason_snapshot', con=analysis_engine, if_exists='replace', index=False)         
+
     
     # 지역별 분석 결과 스냅샷 저장
     region_stats = calculate_regional_sales(ojo_engine)
@@ -64,29 +71,29 @@ def get_dashboard():
 # 요금제 통계
 @app.get("/api/analysis/churn")
 async def get_subscription():
-    result = calculate_subscription(ojo_engine)
-    
-    # 날짜 포맷팅 (Series가 비어있지 않을 때만 수행)
-    if not result['conversions'].empty:
-        result['conversions']['start_month'] = result['conversions']['start_month'].astype(str)
-    
-    return {
-        "status": "SUCCESS",
-        "data": {
-            "conversions": result['conversions'].to_dict(orient='records'),
-            "product_churn": result['product_churn'].to_dict(orient='records'),
-            "top_reasons": result['top_reasons'].to_dict(orient='records')
+    try:
+        conversions = pd.read_sql("SELECT * FROM conversion_snapshot", con=analysis_engine)
+        churn = pd.read_sql("SELECT * FROM churn_snapshot", con=analysis_engine)
+        reasons = pd.read_sql("SELECT * FROM reason_snapshot", con=analysis_engine)
+
+        return {
+            "status": "SUCCESS",
+            "data": {
+                "conversions": conversions.to_dict(orient='records'),
+                "product_churn": churn.to_dict(orient='records'),
+                "top_reasons": reasons.to_dict(orient='records')
+            }
         }
-    }
+    except Exception as e:
+        return {"status": "ERROR", "message": f"데이터가 아직 준비되지 않았습니다: {str(e)}"}
 # 지역 통계
 @app.get("/api/analysis/region")
 async def get_regional_sales():
     try:
         df = pd.read_sql("SELECT * FROM region_snapshot", con=analysis_engine)
         return {"status": "SUCCESS", "data": df.to_dict(orient='records')}
-    # 테이블 없다면
     except Exception:
-        return {"status": "SUCCESS", "data": []}
+        return {"status": "ERROR", "message": "데이터를 불러올 수 없습니다."}
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,38 +1,30 @@
 from fastapi import FastAPI, BackgroundTasks, Path
 import pandas as pd
 import numpy as np
-# 현재 폴더(app) 내의 모듈임을 명시하기 위해 앞에 점(.)을 붙입니다.
 from .database import ojo_engine, analysis_engine
 from .analyzer.ltv_analyzer import calculate_ltv
 from .analyzer.cohort_analyzer import calculate_cohort
 
 app = FastAPI(title="High-5 Data Science Server")
 
-# ==========================================
 # [분석 실행 로직] Spring이 호출함
-# ==========================================
 def run_analysis_pipeline():
-    # 1. 고도화 분석 수행
     ltv_df = calculate_ltv(ojo_engine)
     cohort_df = calculate_cohort(ojo_engine)
     
-    # 2. Spring이 계산한 RFM/KPI 데이터도 필요시 복사하거나 그대로 활용
-    # 여기서는 파이썬이 분석한 결과만 ojo_analysis에 저장
     if not ltv_df.empty:
         ltv_df.to_sql('ltv_snapshot', con=analysis_engine, if_exists='replace', index=False)
     if not cohort_df.empty:
         cohort_df.to_sql('cohort_snapshot', con=analysis_engine, if_exists='replace', index=False)
     
-    print("✅ 분석 결과 적재 완료 (ojo_analysis)")
+    print("분석 결과 적재 완료 (ojo_analysis)")
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_analysis_pipeline)
     return {"status": "started", "message": "LTV 및 코호트 분석을 시작합니다."}
 
-# ==========================================
-# [조회 API] 대시보드에서 호출함
-# ==========================================
+# 조회 API
 @app.get("/api/analysis/ltv/{memberId}")
 def get_member_ltv(memberId: str):
     df = pd.read_sql(f"SELECT * FROM ltv_snapshot WHERE member_id = '{memberId}'", con=analysis_engine)
@@ -43,16 +35,10 @@ def get_cohort():
     # 1. DB에서 데이터를 읽어옵니다.
     df = pd.read_sql("SELECT * FROM cohort_snapshot", con=analysis_engine)
     
-    # 2. NaN, Inf 값을 파이썬이 이해하는 None(JSON의 null)으로 확실히 바꿉니다.
-    # replace와 where를 조합하는 방식이 가장 확실합니다.
     df = df.replace([np.inf, -np.inf], np.nan)
     
-    # 3. 딕셔너리로 바꿀 때 'records' 오리엔테이션을 사용하고, 
-    # 데이터프레임 자체를 변환하여 반환합니다.
     result = df.to_dict(orient='records')
     
-    # 마지막으로 딕셔너리 내부의 NaN들을 수동으로 체크하여 None으로 밀어넣습니다.
-    # (Pandas의 fillna가 가끔 작동하지 않는 경우를 대비한 2중 방어)
     clean_result = [
         {k: (None if pd.isna(v) else v) for k, v in record.items()}
         for record in result
@@ -60,10 +46,8 @@ def get_cohort():
     
     return {"status": "success", "data": clean_result}
 
-# Spring이 ojo DB에 넣어둔 KPI를 그대로 조회하는 API (Proxy 역할)
 @app.get("/api/analysis/dashboard")
 def get_dashboard():
-    # 실제 존재하는 테이블 이름으로 수정하세요
     summary = pd.read_sql("SELECT * FROM rfm_kpi", con=ojo_engine)
     return {"status": "success", "data": summary.to_dict(orient='records')}
 

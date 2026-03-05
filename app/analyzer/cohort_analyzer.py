@@ -14,8 +14,6 @@ def calculate_cohort(ojo_engine):
 
     df['join_month'] = df['join_date'].dt.to_period('M')
     df['order_month'] = df['order_date'].dt.to_period('M')
-
-    # 두 기간의 차이를 구한 뒤, '정수형'으로 추출합니다.
     df['cohort_index'] = (df['order_month'] - df['join_month']).apply(lambda x: x.n)
 
     cohort_data = df.groupby(['join_month', 'cohort_index'])['member_id'].nunique().reset_index()

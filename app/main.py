@@ -28,6 +28,12 @@ def run_analysis_pipeline():
     if not sub_result['product_churn'].empty:
         sub_result['product_churn'].to_sql('churn_snapshot', con=analysis_engine, if_exists='replace', index=False)    
     
+    # 지역별 분석 결과 스냅샷 저장
+    region_stats = calculate_regional_sales(ojo_engine)
+    if region_stats: 
+        region_df = pd.DataFrame(region_stats)
+        region_df.to_sql('region_snapshot', con=analysis_engine, if_exists='replace', index=False)
+
     print("✅ 분석 결과 적재 완료 (ojo_analysis)")
 
 @app.get("/api/analysis/make")
@@ -75,12 +81,12 @@ async def get_subscription():
 # 지역 통계
 @app.get("/api/analysis/region")
 async def get_regional_sales():
-    result = calculate_regional_sales(ojo_engine)
-
-    return {
-        "status": "SUCCESS",
-        "data": result
-    }
+    try:
+        df = pd.read_sql("SELECT * FROM region_snapshot", con=analysis_engine)
+        return {"status": "SUCCESS", "data": df.to_dict(orient='records')}
+    # 테이블 없다면
+    except Exception:
+        return {"status": "SUCCESS", "data": []}
 
 if __name__ == "__main__":
     import uvicorn

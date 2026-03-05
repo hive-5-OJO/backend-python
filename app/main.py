@@ -4,6 +4,7 @@ from database import ojo_engine, analysis_engine
 from analyzer.ltv_analyzer import calculate_ltv
 from analyzer.cohort_analyzer import calculate_cohort
 from analyzer.subscription_analyzer import calculate_subscription
+from analyzer.regional_sales_analyzer import calculate_regional_sales
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -54,6 +55,7 @@ def get_dashboard():
     summary = pd.read_sql("SELECT * FROM kpi_summary_metrics", con=ojo_engine)
     return {"status": "success", "data": summary.to_dict(orient='records')}
 
+# 요금제 통계
 @app.get("/api/analysis/churn")
 async def get_subscription():
     result = calculate_subscription(ojo_engine)
@@ -69,6 +71,15 @@ async def get_subscription():
             "product_churn": result['product_churn'].to_dict(orient='records'),
             "top_reasons": result['top_reasons'].to_dict(orient='records')
         }
+    }
+# 지역 통계
+@app.get("/api/analysis/region")
+async def get_regional_sales():
+    result = calculate_regional_sales(ojo_engine)
+
+    return {
+        "status": "SUCCESS",
+        "data": result
     }
 
 if __name__ == "__main__":

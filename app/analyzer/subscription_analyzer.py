@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 
 def calculate_subscription(ojo_engine):
     query = """
@@ -45,10 +44,10 @@ def calculate_subscription(ojo_engine):
     ).round(4)
     
     churn_result = product_stats.sort_values(by='specific_churn_rate', ascending=False).reset_index()
-    top_reason = df[df['status'] == 'CANCLED'].groupby(['product_name', 'reason_code']).size().unstack(fill_value=0)
+    top_reason = df[df['status'] == 'CANCLED'].groupby(['product_name', 'reason_code']).size().reset_index(name='count')
     
     return {
         "conversions": conversion_stats,
         "product_churn": churn_result,
-        "top_reasons": top_reason.reset_index()
+        "top_reasons": top_reason
     }

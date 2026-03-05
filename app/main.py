@@ -1,8 +1,9 @@
 from fastapi import FastAPI, BackgroundTasks, Path
 import pandas as pd
+import numpy as np
 from database import ojo_engine, analysis_engine
 from analyzer.ltv_analyzer import calculate_ltv
-from analyzer.cohort_analyzer import calculate_cohort
+from analyzer.cohort_analyzer import calculate_segmented_cohort
 from analyzer.subscription_analyzer import calculate_subscription
 from analyzer.regional_sales_analyzer import calculate_regional_sales
 
@@ -10,13 +11,30 @@ app = FastAPI(title="High-5 Data Science Server")
 
 # [분석 실행 로직] Spring이 호출함
 def run_analysis_pipeline():
-    ltv_df = calculate_ltv(ojo_engine)
-    cohort_df = calculate_cohort(ojo_engine)
+    print("다차원 분석 파이프라인 가동...")
     
+    # 1. LTV 계산 및 저장
+    ltv_df = calculate_ltv(ojo_engine)
     if not ltv_df.empty:
         ltv_df.to_sql('ltv_snapshot', con=analysis_engine, if_exists='replace', index=False)
-    if not cohort_df.empty:
-        cohort_df.to_sql('cohort_snapshot', con=analysis_engine, if_exists='replace', index=False)
+
+    # 2. 코호트 세그먼트 리스트 정의
+    segments = ['all', 'high_consult', 'vip', 'big_spender']
+    all_cohort_results = []
+
+    for seg in segments:
+        try:
+            df = calculate_segmented_cohort(ojo_engine, segment_type=seg)
+            if not df.empty:
+                all_cohort_results.append(df)
+        except Exception as e:
+            print(f"❌ {seg} 분석 중 에러 발생: {e}")
+
+    # 3. 모든 결과를 하나의 테이블로 합쳐서 저장
+    if all_cohort_results:
+        final_cohort_df = pd.concat(all_cohort_results, ignore_index=True)
+        final_cohort_df.to_sql('cohort_snapshot', con=analysis_engine, if_exists='replace', index=False)
+        print(f"총 {len(segments)}개 세그먼트 코호트 적재 완료")
 
     # 요금제별 이탈률 스냅샷 저장    
     sub_result = calculate_subscription(ojo_engine)
@@ -36,8 +54,7 @@ def run_analysis_pipeline():
         region_df = pd.DataFrame(region_stats)
         region_df.to_sql('region_snapshot', con=analysis_engine, if_exists='replace', index=False)
 
-    print("분석 결과 적재 완료 (ojo_analysis)")
-
+    print("분석 결과 적재 완료 (ojo_analysis)")    
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
@@ -51,20 +68,19 @@ def get_member_ltv(memberId: str):
     return {"status": "success", "data": df.to_dict(orient='records')[0] if not df.empty else {}}
 
 @app.get("/api/analysis/cohort")
-def get_cohort():
-    # 1. DB에서 데이터를 읽어옵니다.
-    df = pd.read_sql("SELECT * FROM cohort_snapshot", con=analysis_engine)
+def get_cohort(segment: str = 'all'):
+    query = f"SELECT * FROM cohort_snapshot WHERE segment_type = '{segment}'"
+    df = pd.read_sql(query, con=analysis_engine)
     
+    if df.empty:
+        return {"status": "error", "message": f"No data found for segment: {segment}"}
+
+    # JSON 에러 방지 처리 (기존 로직 유지)
     df = df.replace([np.inf, -np.inf], np.nan)
-    
     result = df.to_dict(orient='records')
+    clean_result = [{k: (None if pd.isna(v) else v) for k, v in record.items()} for record in result]
     
-    clean_result = [
-        {k: (None if pd.isna(v) else v) for k, v in record.items()}
-        for record in result
-    ]
-    
-    return {"status": "success", "data": clean_result}
+    return {"status": "success", "segment": segment, "data": clean_result}
 
 @app.get("/api/analysis/dashboard")
 def get_dashboard():

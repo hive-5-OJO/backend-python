@@ -4,7 +4,7 @@ import numpy as np
 def calculate_ltv(ojo_engine):
     print("[분석] LTV(고객 생애 가치) 계산 중...")
     
-    # 1. 필요한 데이터 로드 (Spring이 보정한 데이터들)
+    # 필요한 데이터 로드 
     query = """
     SELECT m.member_id, i.billed_amount, i.created_at 
     FROM member m
@@ -14,8 +14,7 @@ def calculate_ltv(ojo_engine):
     
     if df.empty: return pd.DataFrame()
 
-    # 2. LTV 계산 로직 (단순화: 평균 매출 * 구매 빈도 * 예상 유지 기간)
-    # 고객별 지표 집계
+    # LTV 계산 로직 (단순화: 평균 매출 * 구매 빈도 * 예상 유지 기간)
     ltv_base = df.groupby('member_id').agg({
         'billed_amount': ['mean', 'sum', 'count'],
         'created_at': [lambda x: (x.max() - x.min()).days]

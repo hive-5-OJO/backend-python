@@ -8,21 +8,16 @@ from analyzer.regional_sales_analyzer import calculate_regional_sales
 
 app = FastAPI(title="High-5 Data Science Server")
 
-# ==========================================
 # [분석 실행 로직] Spring이 호출함
-# ==========================================
 def run_analysis_pipeline():
-    # 1. 고도화 분석 수행
     ltv_df = calculate_ltv(ojo_engine)
     cohort_df = calculate_cohort(ojo_engine)
     
-    # 2. Spring이 계산한 RFM/KPI 데이터도 필요시 복사하거나 그대로 활용
-    # 여기서는 파이썬이 분석한 결과만 ojo_analysis에 저장
     if not ltv_df.empty:
         ltv_df.to_sql('ltv_snapshot', con=analysis_engine, if_exists='replace', index=False)
     if not cohort_df.empty:
         cohort_df.to_sql('cohort_snapshot', con=analysis_engine, if_exists='replace', index=False)
-    
+
     # 요금제별 이탈률 스냅샷 저장    
     sub_result = calculate_subscription(ojo_engine)
 
@@ -41,16 +36,15 @@ def run_analysis_pipeline():
         region_df = pd.DataFrame(region_stats)
         region_df.to_sql('region_snapshot', con=analysis_engine, if_exists='replace', index=False)
 
-    print("✅ 분석 결과 적재 완료 (ojo_analysis)")
+    print("분석 결과 적재 완료 (ojo_analysis)")
+
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_analysis_pipeline)
     return {"status": "started", "message": "LTV 및 코호트 분석을 시작합니다."}
 
-# ==========================================
-# [조회 API] 대시보드에서 호출함
-# ==========================================
+# 조회 API
 @app.get("/api/analysis/ltv/{memberId}")
 def get_member_ltv(memberId: str):
     df = pd.read_sql(f"SELECT * FROM ltv_snapshot WHERE member_id = '{memberId}'", con=analysis_engine)
@@ -58,14 +52,23 @@ def get_member_ltv(memberId: str):
 
 @app.get("/api/analysis/cohort")
 def get_cohort():
+    # 1. DB에서 데이터를 읽어옵니다.
     df = pd.read_sql("SELECT * FROM cohort_snapshot", con=analysis_engine)
-    return {"status": "success", "data": df.to_dict(orient='records')}
+    
+    df = df.replace([np.inf, -np.inf], np.nan)
+    
+    result = df.to_dict(orient='records')
+    
+    clean_result = [
+        {k: (None if pd.isna(v) else v) for k, v in record.items()}
+        for record in result
+    ]
+    
+    return {"status": "success", "data": clean_result}
 
-# Spring이 ojo DB에 넣어둔 KPI를 그대로 조회하는 API (Proxy 역할)
 @app.get("/api/analysis/dashboard")
 def get_dashboard():
-    # Spring이 계산해서 ojo DB에 넣어둔 KPI 테이블들을 읽어옴
-    summary = pd.read_sql("SELECT * FROM kpi_summary_metrics", con=ojo_engine)
+    summary = pd.read_sql("SELECT * FROM rfm_kpi", con=ojo_engine)
     return {"status": "success", "data": summary.to_dict(orient='records')}
 
 # 요금제 통계

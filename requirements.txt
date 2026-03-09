@@ -6,4 +6,4 @@ pymysql
 python-dotenv
 scikit-learn
 numpy
-cryptography
+cryptography>=41.0.0

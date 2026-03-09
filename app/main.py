@@ -5,8 +5,6 @@ from .database import ojo_engine, analysis_engine
 from .analyzer.ltv_analyzer import calculate_ltv
 from .analyzer.cohort_analyzer import calculate_segmented_cohort
 from .analyzer.advice_analyzer import calculate_advice_time_stats, get_member_advice_timeline
-from .analyzer.subscription_analyzer import calculate_subscription
-from .analyzer.regional_sales_analyzer import calculate_regional_sales
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -47,25 +45,6 @@ def run_analysis_pipeline():
     except Exception as e:
         print(f"상담 통계 분석 중 에러 발생: {e}")
 
-    # 요금제별 이탈률 스냅샷 저장    
-    sub_result = calculate_subscription(ojo_engine)
-
-    if isinstance(sub_result, dict):
-        if not sub_result['conversions'].empty:
-            sub_result['conversions'].to_sql('conversion_snapshot', con=analysis_engine, if_exists='replace', index=False) 
-        if not sub_result['product_churn'].empty:
-            sub_result['product_churn'].to_sql('churn_snapshot', con=analysis_engine, if_exists='replace', index=False) 
-        if not sub_result['top_reasons'].empty:
-            sub_result['top_reasons'].to_sql('reason_snapshot', con=analysis_engine, if_exists='replace', index=False)         
-
-    
-    # 지역별 분석 결과 스냅샷 저장
-    region_stats = calculate_regional_sales(ojo_engine)
-    if region_stats: 
-        region_df = pd.DataFrame(region_stats)
-        region_df.to_sql('region_snapshot', con=analysis_engine, if_exists='replace', index=False)
-
-    print("분석 결과 적재 완료 (ojo_analysis)")    
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
@@ -135,32 +114,6 @@ def get_member_timeline(memberId: int):
         }
     except Exception as e:
         return {"status": "error", "data": None, "message": str(e)}
-# 요금제 통계
-@app.get("/api/analysis/churn")
-async def get_subscription():
-    try:
-        conversions = pd.read_sql("SELECT * FROM conversion_snapshot", con=analysis_engine)
-        churn = pd.read_sql("SELECT * FROM churn_snapshot", con=analysis_engine)
-        reasons = pd.read_sql("SELECT * FROM reason_snapshot", con=analysis_engine)
-
-        return {
-            "status": "SUCCESS",
-            "data": {
-                "conversions": conversions.to_dict(orient='records'),
-                "product_churn": churn.to_dict(orient='records'),
-                "top_reasons": reasons.to_dict(orient='records')
-            }
-        }
-    except Exception as e:
-        return {"status": "ERROR", "message": f"데이터가 아직 준비되지 않았습니다: {str(e)}"}
-# 지역 통계
-@app.get("/api/analysis/region")
-async def get_regional_sales():
-    try:
-        df = pd.read_sql("SELECT * FROM region_snapshot", con=analysis_engine)
-        return {"status": "SUCCESS", "data": df.to_dict(orient='records')}
-    except Exception:
-        return {"status": "ERROR", "message": "데이터를 불러올 수 없습니다."}
 
 if __name__ == "__main__":
     import uvicorn

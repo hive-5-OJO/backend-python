@@ -91,12 +91,12 @@ def get_advice_time_stats():
         df = pd.read_sql(query, con=analysis_engine)
         
         return {
-            "status": "SUCCESS", 
-            "message": "시간대별 상담 통계 조회 성공",
-            "data": df.to_dict(orient='records')
+            "status": "success", 
+            "data": df.to_dict(orient='records'),
+            "message": None
         }
     except Exception as e:
-        return {"status": "ERROR", "message": str(e)}
+        return {"status": "error", "data": None, "message": str(e)}
 
 # 고객별 상담 타임라인
 @app.get("/api/advice/timeline/{memberId}")
@@ -105,12 +105,15 @@ def get_member_timeline(memberId: int):
         df = get_member_advice_timeline(ojo_engine, memberId)
         
         return {
-            "status": "SUCCESS", 
-            "message": "고객별 상담 타임라인 조회 성공",
-            "data": df.to_dict(orient='records')
+            "status": "success", 
+            "data": {
+                "memberId": memberId,
+                "timeline": df.to_dict(orient='records') if not df.empty else []
+            },
+            "message": None
         }
     except Exception as e:
-        return {"status": "ERROR", "message": str(e)}
+        return {"status": "error", "data": None, "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

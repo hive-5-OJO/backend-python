@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 5. 소스 코드 전체 복사
 COPY . .
+ENV PYTHONPATH=/app:/app/app
 
 # 6. 8000 포트 개방 및 Uvicorn 서버 실행
 EXPOSE 8000

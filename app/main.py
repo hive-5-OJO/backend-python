@@ -1,9 +1,11 @@
 from fastapi import FastAPI, BackgroundTasks, Path
 import pandas as pd
 import numpy as np
-from .database import ojo_engine, analysis_engine
-from .analyzer.ltv_analyzer import calculate_ltv
-from .analyzer.cohort_analyzer import calculate_segmented_cohort
+from database import ojo_engine, analysis_engine
+from analyzer.ltv_analyzer import calculate_ltv
+from analyzer.cohort_analyzer import calculate_segmented_cohort
+from analyzer.subscription_analyzer import calculate_subscription
+from analyzer.regional_sales_analyzer import calculate_regional_sales
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -33,6 +35,26 @@ def run_analysis_pipeline():
         final_cohort_df = pd.concat(all_cohort_results, ignore_index=True)
         final_cohort_df.to_sql('cohort_snapshot', con=analysis_engine, if_exists='replace', index=False)
         print(f"총 {len(segments)}개 세그먼트 코호트 적재 완료")
+
+    # 요금제별 이탈률 스냅샷 저장    
+    sub_result = calculate_subscription(ojo_engine)
+
+    if isinstance(sub_result, dict):
+        if not sub_result['conversions'].empty:
+            sub_result['conversions'].to_sql('conversion_snapshot', con=analysis_engine, if_exists='replace', index=False) 
+        if not sub_result['product_churn'].empty:
+            sub_result['product_churn'].to_sql('churn_snapshot', con=analysis_engine, if_exists='replace', index=False) 
+        if not sub_result['top_reasons'].empty:
+            sub_result['top_reasons'].to_sql('reason_snapshot', con=analysis_engine, if_exists='replace', index=False)         
+
+    
+    # 지역별 분석 결과 스냅샷 저장
+    region_stats = calculate_regional_sales(ojo_engine)
+    if region_stats: 
+        region_df = pd.DataFrame(region_stats)
+        region_df.to_sql('region_snapshot', con=analysis_engine, if_exists='replace', index=False)
+
+    print("분석 결과 적재 완료 (ojo_analysis)")    
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
@@ -64,6 +86,33 @@ def get_cohort(segment: str = 'all'):
 def get_dashboard():
     summary = pd.read_sql("SELECT * FROM rfm_kpi", con=ojo_engine)
     return {"status": "success", "data": summary.to_dict(orient='records')}
+
+# 요금제 통계
+@app.get("/api/analysis/churn")
+async def get_subscription():
+    try:
+        conversions = pd.read_sql("SELECT * FROM conversion_snapshot", con=analysis_engine)
+        churn = pd.read_sql("SELECT * FROM churn_snapshot", con=analysis_engine)
+        reasons = pd.read_sql("SELECT * FROM reason_snapshot", con=analysis_engine)
+
+        return {
+            "status": "SUCCESS",
+            "data": {
+                "conversions": conversions.to_dict(orient='records'),
+                "product_churn": churn.to_dict(orient='records'),
+                "top_reasons": reasons.to_dict(orient='records')
+            }
+        }
+    except Exception as e:
+        return {"status": "ERROR", "message": f"데이터가 아직 준비되지 않았습니다: {str(e)}"}
+# 지역 통계
+@app.get("/api/analysis/region")
+async def get_regional_sales():
+    try:
+        df = pd.read_sql("SELECT * FROM region_snapshot", con=analysis_engine)
+        return {"status": "SUCCESS", "data": df.to_dict(orient='records')}
+    except Exception:
+        return {"status": "ERROR", "message": "데이터를 불러올 수 없습니다."}
 
 if __name__ == "__main__":
     import uvicorn

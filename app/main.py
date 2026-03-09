@@ -4,6 +4,7 @@ import numpy as np
 from .database import ojo_engine, analysis_engine
 from .analyzer.ltv_analyzer import calculate_ltv
 from .analyzer.cohort_analyzer import calculate_segmented_cohort
+from .analyzer.advice_analyzer import calculate_advice_time_stats, get_member_advice_timeline
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -16,7 +17,7 @@ def run_analysis_pipeline():
     if not ltv_df.empty:
         ltv_df.to_sql('ltv_snapshot', con=analysis_engine, if_exists='replace', index=False)
 
-    # 2. 코호트 세그먼트 리스트 정의
+    # 2. 코호트 세그먼트 리스트 정의 및 계산
     segments = ['all', 'high_consult', 'vip', 'big_spender']
     all_cohort_results = []
 
@@ -26,7 +27,7 @@ def run_analysis_pipeline():
             if not df.empty:
                 all_cohort_results.append(df)
         except Exception as e:
-            print(f"❌ {seg} 분석 중 에러 발생: {e}")
+            print(f"{seg} 코호트 분석 중 에러 발생: {e}")
 
     # 3. 모든 결과를 하나의 테이블로 합쳐서 저장
     if all_cohort_results:
@@ -34,10 +35,27 @@ def run_analysis_pipeline():
         final_cohort_df.to_sql('cohort_snapshot', con=analysis_engine, if_exists='replace', index=False)
         print(f"총 {len(segments)}개 세그먼트 코호트 적재 완료")
 
+    # 4. 상담 시간대별 통계 계산 및 스냅샷 적재
+    print("상담 시간대별 통계 분석 시작...")
+    try:
+        time_stats_df = calculate_advice_time_stats(ojo_engine)
+        if not time_stats_df.empty:
+            time_stats_df.to_sql('advice_time_stats_snapshot', con=analysis_engine, if_exists='replace', index=False)
+            print("상담 시간대별 통계 스냅샷 적재 완료")
+    except Exception as e:
+        print(f"상담 통계 분석 중 에러 발생: {e}")
+
+
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
+    # 사용자가 API를 찌르면, 파이프라인 함수를 백그라운드 작업으로 던져놓습니다.
     background_tasks.add_task(run_analysis_pipeline)
-    return {"status": "started", "message": "LTV 및 코호트 분석을 시작합니다."}
+    
+    # 분석이 끝나길 기다리지 않고 바로 성공 응답을 줍니다! (타임아웃 방지)
+    return {
+        "status": "started", 
+        "message": "다차원 분석 및 스냅샷 적재를 백그라운드에서 안전하게 시작합니다."
+    }
 
 # 조회 API
 @app.get("/api/analysis/ltv/{memberId}")
@@ -64,6 +82,35 @@ def get_cohort(segment: str = 'all'):
 def get_dashboard():
     summary = pd.read_sql("SELECT * FROM rfm_kpi", con=ojo_engine)
     return {"status": "success", "data": summary.to_dict(orient='records')}
+
+# 상담 시간대별 통계
+@app.get("/api/advice/time")
+def get_advice_time_stats():
+    try:
+        query = "SELECT * FROM advice_time_stats_snapshot ORDER BY hour"
+        df = pd.read_sql(query, con=analysis_engine)
+        
+        return {
+            "status": "SUCCESS", 
+            "message": "시간대별 상담 통계 조회 성공",
+            "data": df.to_dict(orient='records')
+        }
+    except Exception as e:
+        return {"status": "ERROR", "message": str(e)}
+
+# 고객별 상담 타임라인
+@app.get("/api/advice/timeline/{memberId}")
+def get_member_timeline(memberId: int):
+    try:
+        df = get_member_advice_timeline(ojo_engine, memberId)
+        
+        return {
+            "status": "SUCCESS", 
+            "message": "고객별 상담 타임라인 조회 성공",
+            "data": df.to_dict(orient='records')
+        }
+    except Exception as e:
+        return {"status": "ERROR", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

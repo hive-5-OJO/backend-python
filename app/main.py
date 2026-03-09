@@ -5,8 +5,8 @@ from .database import ojo_engine, analysis_engine
 from .analyzer.ltv_analyzer import calculate_ltv
 from .analyzer.cohort_analyzer import calculate_segmented_cohort
 from .analyzer.advice_analyzer import calculate_advice_time_stats, get_member_advice_timeline
-from analyzer.subscription_analyzer import calculate_subscription
-from analyzer.regional_sales_analyzer import calculate_regional_sales
+from .analyzer.subscription_analyzer import calculate_subscription
+from .analyzer.regional_sales_analyzer import calculate_regional_sales
 
 app = FastAPI(title="High-5 Data Science Server")
 

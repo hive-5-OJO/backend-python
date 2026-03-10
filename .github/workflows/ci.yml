@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "main" ]
   pull_request: 
-    branches: [ "main" ]
+    branches: [ "main", "develop" ]
 
 jobs:
   build:
@@ -19,14 +19,26 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      - name: Set Tag Name
+        id: vars
+        run: |
+          # 기본 태그는 dev
+          TAG="dev"
+          # main 브랜치에 push(merge) 되었을 때만 latest 사용
+          if [[ "${{ github.ref }}" == "refs/heads/main" && "${{ github.event_name }}" == "push" ]]; then
+            TAG="latest"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
       - name: Build and Push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/ojo-analytics:latest
+          tags: ${{ secrets.DOCKER_USERNAME }}/ojo-analytics:${{ steps.vars.outputs.tag }}
       
       - name: Deploy to python_server(EC2)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: appleboy/ssh-action@master
         id: deploy
         with:

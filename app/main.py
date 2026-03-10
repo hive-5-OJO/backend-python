@@ -4,7 +4,9 @@ import numpy as np
 from .database import ojo_engine, analysis_engine
 from .analyzer.ltv_analyzer import calculate_ltv
 from .analyzer.cohort_analyzer import calculate_segmented_cohort
-from .analyzer.advice_analyzer import calculate_advice_time_stats, get_member_advice_timeline
+from .analyzer.subscription_analyzer import calculate_subscription
+from .analyzer.regional_sales_analyzer import calculate_regional_sales
+from .analyzer.advice_analyzer import get_member_advice_timeline
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -35,16 +37,24 @@ def run_analysis_pipeline():
         final_cohort_df.to_sql('cohort_snapshot', con=analysis_engine, if_exists='replace', index=False)
         print(f"총 {len(segments)}개 세그먼트 코호트 적재 완료")
 
-    # 4. 상담 시간대별 통계 계산 및 스냅샷 적재
-    print("상담 시간대별 통계 분석 시작...")
-    try:
-        time_stats_df = calculate_advice_time_stats(ojo_engine)
-        if not time_stats_df.empty:
-            time_stats_df.to_sql('advice_time_stats_snapshot', con=analysis_engine, if_exists='replace', index=False)
-            print("상담 시간대별 통계 스냅샷 적재 완료")
-    except Exception as e:
-        print(f"상담 통계 분석 중 에러 발생: {e}")
+    # 요금제별 이탈률 스냅샷 저장    
+    sub_result = calculate_subscription(ojo_engine)
+    if not sub_result['product_churn'].empty:
+        sub_result['product_churn'].to_sql('churn_snapshot', con=analysis_engine, if_exists='replace', index=False)    
+    
+    # 지역별 분석 결과 스냅샷 저장
+    region_stats = calculate_regional_sales(ojo_engine)
+    if region_stats: 
+        region_df = pd.DataFrame(region_stats)
+        region_df.to_sql('region_snapshot', con=analysis_engine, if_exists='replace', index=False)
 
+    print("분석 결과 적재 완료 (ojo_analysis)")
+
+def clean_df(df):
+    if df.empty: return []
+    # NaN은 None으로, Inf는 매우 큰 수나 None으로 교체
+    df = df.replace([np.inf, -np.inf], np.nan)
+    return df.where(pd.notnull(df), None).to_dict(orient='records')
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
@@ -78,26 +88,39 @@ def get_cohort(segment: str = 'all'):
     
     return {"status": "success", "segment": segment, "data": clean_result}
 
+# 추후 삭제될 수도 있음
 @app.get("/api/analysis/dashboard")
 def get_dashboard():
     summary = pd.read_sql("SELECT * FROM rfm_kpi", con=ojo_engine)
     return {"status": "success", "data": summary.to_dict(orient='records')}
 
-# 상담 시간대별 통계
-@app.get("/api/advice/time")
-def get_advice_time_stats():
-    try:
-        query = "SELECT * FROM advice_time_stats_snapshot ORDER BY hour"
-        df = pd.read_sql(query, con=analysis_engine)
-        
-        return {
-            "status": "success", 
-            "data": df.to_dict(orient='records'),
-            "message": None
+# 요금제 통계
+@app.get("/api/analysis/churn")
+async def get_subscription():
+    result = calculate_subscription(ojo_engine)
+    
+    # 날짜 포맷팅 (Series가 비어있지 않을 때만 수행)
+    if not result['conversions'].empty:
+        result['conversions']['start_month'] = result['conversions']['start_month'].astype(str)
+    
+    return {
+        "status": "SUCCESS",
+        "data": {
+            "conversions": result['conversions'].to_dict(orient='records'),
+            "product_churn": result['product_churn'].to_dict(orient='records'),
+            "top_reasons": result['top_reasons'].to_dict(orient='records')
         }
-    except Exception as e:
-        return {"status": "error", "data": None, "message": str(e)}
-
+    }
+# 지역 통계
+@app.get("/api/analysis/region")
+async def get_regional_sales():
+    try:
+        df = pd.read_sql("SELECT * FROM region_snapshot", con=analysis_engine)
+        return {"status": "SUCCESS", "data": clean_df(df)}
+    # 테이블 없다면
+    except Exception:
+        return {"status": "SUCCESS", "data": []}
+    
 # 고객별 상담 타임라인
 @app.get("/api/advice/timeline/{memberId}")
 def get_member_timeline(memberId: int):

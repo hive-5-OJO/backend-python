@@ -15,7 +15,7 @@ app = FastAPI(title="High-5 Data Science Server")
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    #실서버 도메인도 추가
+    "http://high5-ojo.s3-website.ap-northeast-2.amazonaws.com"
 ]
 
 app.add_middleware(

@@ -1,3 +1,9 @@
 fastapi
 uvicorn
-# 사용할 라이브러리 기입 ex. pandas, scikit-learn
+pandas
+sqlalchemy
+pymysql
+python-dotenv
+scikit-learn
+numpy
+cryptography>=41.0.0

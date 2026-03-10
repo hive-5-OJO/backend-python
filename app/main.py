@@ -1,153 +1,119 @@
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, Path
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-from sqlalchemy import create_engine
+from .database import ojo_engine, analysis_engine
+from .analyzer.ltv_analyzer import calculate_ltv
+from .analyzer.cohort_analyzer import calculate_segmented_cohort
+from .analyzer.advice_analyzer import calculate_advice_time_stats, get_member_advice_timeline
 
-app = FastAPI(title="High-5 Analysis Batch Server (Final Fixed)")
+app = FastAPI(title="High-5 Data Science Server")
 
-# 1. 로컬 DB 연결 (sqlite 파일)
-DB_URL = "sqlite:///./analysis_data.db"
-engine = create_engine(DB_URL)
+# [분석 실행 로직] Spring이 호출함
+def run_analysis_pipeline():
+    print("다차원 분석 파이프라인 가동...")
+    
+    # 1. LTV 계산 및 저장
+    ltv_df = calculate_ltv(ojo_engine)
+    if not ltv_df.empty:
+        ltv_df.to_sql('ltv_snapshot', con=analysis_engine, if_exists='replace', index=False)
 
+    # 2. 코호트 세그먼트 리스트 정의 및 계산
+    segments = ['all', 'high_consult', 'vip', 'big_spender']
+    all_cohort_results = []
 
-# 더미 데이터 생성 (수정판: 가입일 기준 결제 생성)
-def generate_instant_dummy():
-    np.random.seed(42)
-    n = 100
-    today = datetime(2026, 2, 14)
-    
-    # 1. 회원 데이터 생성
-    segments = ['장기 VIP', '데이터 헤비', '가격 민감', '잦은 민원', '일반']
-    member_data = []
-    for i in range(n):
-        seg = np.random.choice(segments)
-        # 가입일을 다양하게 (최근 1년치 집중)
-        join_date = today - timedelta(days=np.random.randint(1, 365))
-        member_data.append({
-            'customer_id': 1000 + i,
-            'segment': seg,
-            'created_at': join_date
-        })
-    df_m = pd.DataFrame(member_data)
-    
-    # 2. 상담 데이터 생성
-    advice_data = []
-    for i in range(n):
-        count = np.random.randint(1, 10) # 누구나 1번쯤은 상담함
-        for _ in range(count):
-            advice_data.append({
-                'customer_id': 1000 + i,
-                'start_at': df_m.iloc[i]['created_at'] + timedelta(days=np.random.randint(0, 100))
-            })
-    df_a = pd.DataFrame(advice_data)
-    
-    # 3. 매출(Invoice) 데이터 생성
-    invoice_data = []
-    for i in range(n):
-        signup_date = df_m.iloc[i]['created_at']
-        seg = df_m.iloc[i]['segment']
-        base_pay = 80000 if seg == '데이터 헤비' else 40000
-        
-        # 가입 직후부터 매달 결제한다고 가정 (최대 12개월)
-        # 랜덤하게 중도 이탈(range를 줄임)하는 효과 추가
-        retention_months = np.random.randint(1, 13) 
-        
-        for m in range(retention_months):
-            pay_date = signup_date + timedelta(days=m*30)
-            if pay_date > today: break # 미래 날짜 방지
-            
-            invoice_data.append({
-                'customer_id': 1000 + i,
-                'billed_amount': base_pay + np.random.randint(-5000, 5000),
-                'paid_at': pay_date
-            })
-            
-    df_i = pd.DataFrame(invoice_data)
-            
-    return df_m, df_a, df_i
+    for seg in segments:
+        try:
+            df = calculate_segmented_cohort(ojo_engine, segment_type=seg)
+            if not df.empty:
+                all_cohort_results.append(df)
+        except Exception as e:
+            print(f"{seg} 코호트 분석 중 에러 발생: {e}")
 
-# 배치 분석 엔진 (RFM + LTV + Cohort -> DB 저장)
-def perform_full_analysis_and_save():
-    print("🚀 [배치] 데이터 분석 시작...")
-    df_m, df_a, df_i = generate_instant_dummy()
-    today = datetime(2026, 2, 14)
-    
-    # RFM & LTV 계산
-    recency = df_a.groupby('customer_id')['start_at'].max().reset_index()
-    recency['R'] = (today - recency['start_at']).dt.days
-    frequency = df_a.groupby('customer_id').size().reset_index(name='F')
-    monetary = df_i.groupby('customer_id')['billed_amount'].sum().reset_index(name='M')
-    
-    # 데이터 병합 (NaN 방지를 위해 fillna(0) 즉시 적용)
-    rfm = df_m.merge(recency, on='customer_id', how='left') \
-              .merge(frequency, on='customer_id', how='left') \
-              .merge(monetary, on='customer_id', how='left') \
-              .fillna(0)
-    
-    # RFM 스코어링
-    rfm['R_score'] = pd.qcut(rfm['R'].rank(method='first'), 5, labels=[5, 4, 3, 2, 1]).astype(int)
-    rfm['F_score'] = pd.qcut(rfm['F'].rank(method='first'), 5, labels=[1, 2, 3, 4, 5]).astype(int)
-    rfm['M_score'] = pd.qcut(rfm['M'].rank(method='first'), 5, labels=[1, 2, 3, 4, 5]).astype(int)
-    rfm['total_score'] = rfm['R_score'] + rfm['F_score'] + rfm['M_score']
-    
-    #LTV (고객 생애 가치) 계산
-    rfm['tenure_months'] = (today - rfm['created_at']).dt.days // 30
-    rfm['avg_monthly_revenue'] = rfm['M'] / 3
-    rfm['LTV'] = (rfm['avg_monthly_revenue'] * rfm['tenure_months']).astype(int)
-    
-    #  코호트(Cohort) 분석
-    df_m['SignupMonth'] = pd.to_datetime(df_m['created_at']).dt.to_period('M')
-    df_i['InvoiceMonth'] = pd.to_datetime(df_i['paid_at']).dt.to_period('M')
-    
-    df_merged = pd.merge(df_i, df_m[['customer_id', 'SignupMonth']], on='customer_id')
-    df_merged['CohortIndex'] = (df_merged['InvoiceMonth'] - df_merged['SignupMonth']).apply(lambda x: x.n)
-    
-    cohort_data = df_merged.groupby(['SignupMonth', 'CohortIndex'])['customer_id'].nunique().reset_index()
-    cohort_pivot = cohort_data.pivot(index='SignupMonth', columns='CohortIndex', values='customer_id')
-    
-    cohort_size = cohort_pivot.iloc[:, 0]
-    retention = (cohort_pivot.divide(cohort_size, axis=0).round(3) * 100).fillna(0).reset_index()
-    
-    # DB 저장 전처리 (타입 변환) 
-    if 'created_at' in rfm.columns: rfm['created_at'] = rfm['created_at'].astype(str)
-    if 'start_at' in rfm.columns: rfm['start_at'] = rfm['start_at'].astype(str)
-    
-    retention['SignupMonth'] = retention['SignupMonth'].astype(str)
-    
-    #  DB에 저장 (Snapshot)
-    rfm.to_sql(name='rfm_snapshot', con=engine, if_exists='replace', index=False)
-    retention.to_sql(name='cohort_snapshot', con=engine, if_exists='replace', index=False)
-    
-    print("✅ [배치 완료] RFM(LTV 포함) 및 코호트 분석 결과가 DB에 저장되었습니다.")
+    # 3. 모든 결과를 하나의 테이블로 합쳐서 저장
+    if all_cohort_results:
+        final_cohort_df = pd.concat(all_cohort_results, ignore_index=True)
+        final_cohort_df.to_sql('cohort_snapshot', con=analysis_engine, if_exists='replace', index=False)
+        print(f"총 {len(segments)}개 세그먼트 코호트 적재 완료")
 
-
-# API 엔드포인트
-@app.post("/api/analysis/trigger-batch")
-async def trigger_analysis(background_tasks: BackgroundTasks):
-    """(1) 분석 실행 트리거: 백그라운드에서 분석 후 DB 저장"""
-    background_tasks.add_task(perform_full_analysis_and_save)
-    return {"status": "started", "message": "배치 분석이 시작되었습니다. 잠시 후 DB를 확인하세요."}
-
-@app.get("/api/analysis/db-check")
-def check_rfm_ltv_data():
-    """(2) RFM 및 LTV 결과 조회 (DB에서 읽기)"""
+    # 4. 상담 시간대별 통계 계산 및 스냅샷 적재
+    print("상담 시간대별 통계 분석 시작...")
     try:
-        # 안전하게 NaN을 0으로 한 번 더 처리
-        df = pd.read_sql("SELECT customer_id, segment, total_score, LTV FROM rfm_snapshot LIMIT 5", con=engine)
-        return {"rfm_ltv_sample": df.fillna(0).to_dict(orient='records')}
+        time_stats_df = calculate_advice_time_stats(ojo_engine)
+        if not time_stats_df.empty:
+            time_stats_df.to_sql('advice_time_stats_snapshot', con=analysis_engine, if_exists='replace', index=False)
+            print("상담 시간대별 통계 스냅샷 적재 완료")
     except Exception as e:
-        return {"message": "데이터가 없습니다. 배치를 먼저 실행하세요.", "error": str(e)}
+        print(f"상담 통계 분석 중 에러 발생: {e}")
 
-@app.get("/api/analysis/cohort-check")
-def check_cohort_data():
-    """(3) 코호트 분석 결과 조회 (DB에서 읽기)"""
+
+@app.get("/api/analysis/make")
+async def make_analysis(background_tasks: BackgroundTasks):
+    # 사용자가 API를 찌르면, 파이프라인 함수를 백그라운드 작업으로 던져놓습니다.
+    background_tasks.add_task(run_analysis_pipeline)
+    
+    # 분석이 끝나길 기다리지 않고 바로 성공 응답을 줍니다! (타임아웃 방지)
+    return {
+        "status": "started", 
+        "message": "다차원 분석 및 스냅샷 적재를 백그라운드에서 안전하게 시작합니다."
+    }
+
+# 조회 API
+@app.get("/api/analysis/ltv/{memberId}")
+def get_member_ltv(memberId: str):
+    df = pd.read_sql(f"SELECT * FROM ltv_snapshot WHERE member_id = '{memberId}'", con=analysis_engine)
+    return {"status": "success", "data": df.to_dict(orient='records')[0] if not df.empty else {}}
+
+@app.get("/api/analysis/cohort")
+def get_cohort(segment: str = 'all'):
+    query = f"SELECT * FROM cohort_snapshot WHERE segment_type = '{segment}'"
+    df = pd.read_sql(query, con=analysis_engine)
+    
+    if df.empty:
+        return {"status": "error", "message": f"No data found for segment: {segment}"}
+
+    # JSON 에러 방지 처리 (기존 로직 유지)
+    df = df.replace([np.inf, -np.inf], np.nan)
+    result = df.to_dict(orient='records')
+    clean_result = [{k: (None if pd.isna(v) else v) for k, v in record.items()} for record in result]
+    
+    return {"status": "success", "segment": segment, "data": clean_result}
+
+@app.get("/api/analysis/dashboard")
+def get_dashboard():
+    summary = pd.read_sql("SELECT * FROM rfm_kpi", con=ojo_engine)
+    return {"status": "success", "data": summary.to_dict(orient='records')}
+
+# 상담 시간대별 통계
+@app.get("/api/advice/time")
+def get_advice_time_stats():
     try:
-        df = pd.read_sql("SELECT * FROM cohort_snapshot", con=engine)
-        # 안전하게 NaN을 0으로 한 번 더 처리
-        return {"cohort_data": df.fillna(0).to_dict(orient='records')}
+        query = "SELECT * FROM advice_time_stats_snapshot ORDER BY hour"
+        df = pd.read_sql(query, con=analysis_engine)
+        
+        return {
+            "status": "success", 
+            "data": df.to_dict(orient='records'),
+            "message": None
+        }
     except Exception as e:
-        return {"message": "코호트 데이터가 없습니다. 배치를 먼저 실행하세요.", "error": str(e)}
+        return {"status": "error", "data": None, "message": str(e)}
+
+# 고객별 상담 타임라인
+@app.get("/api/advice/timeline/{memberId}")
+def get_member_timeline(memberId: int):
+    try:
+        df = get_member_advice_timeline(ojo_engine, memberId)
+        
+        return {
+            "status": "success", 
+            "data": {
+                "memberId": memberId,
+                "timeline": df.to_dict(orient='records') if not df.empty else []
+            },
+            "message": None
+        }
+    except Exception as e:
+        return {"status": "error", "data": None, "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

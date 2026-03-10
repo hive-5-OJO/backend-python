@@ -2,7 +2,7 @@ from fastapi import FastAPI, BackgroundTasks, Path
 import pandas as pd
 import numpy as np
 from .database import ojo_engine, analysis_engine
-# from .analyzer.ltv_analyzer import calculate_ltv
+from .analyzer.ltv_analyzer import calculate_ltv
 from .analyzer.cohort_analyzer import calculate_segmented_cohort
 from .analyzer.subscription_analyzer import calculate_subscription
 from .analyzer.regional_sales_analyzer import calculate_regional_sales
@@ -15,9 +15,9 @@ def run_analysis_pipeline():
     print("다차원 분석 파이프라인 가동...")
     
     # 1. LTV 계산 및 저장
-    # ltv_df = calculate_ltv(ojo_engine)
-    # if not ltv_df.empty:
-    #     ltv_df.to_sql('ltv_snapshot', con=analysis_engine, if_exists='replace', index=False)
+    ltv_df = calculate_ltv(ojo_engine)
+    if not ltv_df.empty:
+        ltv_df.to_sql('ltv_snapshot', con=analysis_engine, if_exists='replace', index=False)
 
     # 2. 코호트 세그먼트 리스트 정의 및 계산
     segments = ['all', 'high_consult', 'vip', 'big_spender']
@@ -68,10 +68,10 @@ async def make_analysis(background_tasks: BackgroundTasks):
     }
 
 # 조회 API
-# @app.get("/api/analysis/ltv/{memberId}")
-# def get_member_ltv(memberId: str):
-#     df = pd.read_sql(f"SELECT * FROM ltv_snapshot WHERE member_id = '{memberId}'", con=analysis_engine)
-#     return {"status": "success", "data": df.to_dict(orient='records')[0] if not df.empty else {}}
+@app.get("/api/analysis/ltv/{memberId}")
+def get_member_ltv(memberId: str):
+    df = pd.read_sql(f"SELECT * FROM ltv_snapshot WHERE member_id = '{memberId}'", con=analysis_engine)
+    return {"status": "success", "data": df.to_dict(orient='records')[0] if not df.empty else {}}
 
 @app.get("/api/analysis/cohort")
 def get_cohort(segment: str = 'all'):

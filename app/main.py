@@ -7,8 +7,24 @@ from .analyzer.cohort_analyzer import calculate_segmented_cohort
 from .analyzer.subscription_analyzer import calculate_subscription
 from .analyzer.regional_sales_analyzer import calculate_regional_sales
 from .analyzer.advice_analyzer import get_member_advice_timeline
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="High-5 Data Science Server")
+
+# 프론트엔드 개발 서버 주소
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://high5-ojo.s3-website.ap-northeast-2.amazonaws.com"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"], # GET, POST, OPTIONS 등 모든 메서드 허용
+    allow_headers=["*"], # 모든 헤더 허용
+)
 
 # [분석 실행 로직] Spring이 호출함
 def run_analysis_pipeline():

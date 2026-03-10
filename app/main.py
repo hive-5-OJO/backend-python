@@ -7,6 +7,7 @@ from .analyzer.cohort_analyzer import calculate_segmented_cohort
 from .analyzer.advice_analyzer import calculate_advice_time_stats, get_member_advice_timeline
 from .analyzer.subscription_analyzer import calculate_subscription
 from .analyzer.regional_sales_analyzer import calculate_regional_sales
+from .analyzer.churn_prediction_analyzer import calculate_churn_prediction
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -66,6 +67,31 @@ def run_analysis_pipeline():
         region_df.to_sql('region_snapshot', con=analysis_engine, if_exists='replace', index=False)
 
     print("분석 결과 적재 완료 (ojo_analysis)")    
+    
+        # 이탈 예측 스냅샷 저장
+    print("이탈 예측 분석 시작...")
+    try:
+        churn_result = calculate_churn_prediction(ojo_engine)
+
+        if not churn_result["detail"].empty:
+            churn_result["detail"].to_sql(
+                'churn_prediction_snapshot',
+                con=analysis_engine,
+                if_exists='replace',
+                index=False
+            )
+
+        if not churn_result["summary"].empty:
+            churn_result["summary"].to_sql(
+                'churn_prediction_summary_snapshot',
+                con=analysis_engine,
+                if_exists='replace',
+                index=False
+            )
+
+        print("이탈 예측 스냅샷 적재 완료")
+    except Exception as e:
+        print(f"이탈 예측 분석 중 에러 발생: {e}")
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
@@ -165,3 +191,29 @@ async def get_regional_sales():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+    
+    
+@app.get("/api/predictions/churn")
+async def get_churn_prediction():
+    try:
+        df = pd.read_sql(
+            "SELECT * FROM churn_prediction_summary_snapshot",
+            con=analysis_engine
+        )
+
+        total_count = int(df["count"].sum()) if not df.empty else 0
+
+        return {
+            "status": "success",
+            "data": {
+                "totalAnalyzed": total_count,
+                "riskDistribution": df.to_dict(orient="records") if not df.empty else []
+            },
+            "message": None
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "data": None,
+            "message": "fail"
+        }

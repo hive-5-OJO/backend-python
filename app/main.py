@@ -4,10 +4,10 @@ import numpy as np
 from .database import ojo_engine, analysis_engine
 from .analyzer.ltv_analyzer import calculate_ltv
 from .analyzer.cohort_analyzer import calculate_segmented_cohort
-from .analyzer.advice_analyzer import calculate_advice_time_stats, get_member_advice_timeline
 from .analyzer.subscription_analyzer import calculate_subscription
 from .analyzer.regional_sales_analyzer import calculate_regional_sales
 from .analyzer.churn_prediction_analyzer import calculate_churn_prediction
+from .analyzer.advice_analyzer import get_member_advice_timeline
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -38,37 +38,20 @@ def run_analysis_pipeline():
         final_cohort_df.to_sql('cohort_snapshot', con=analysis_engine, if_exists='replace', index=False)
         print(f"총 {len(segments)}개 세그먼트 코호트 적재 완료")
 
-    # 4. 상담 시간대별 통계 계산 및 스냅샷 적재
-    print("상담 시간대별 통계 분석 시작...")
-    try:
-        time_stats_df = calculate_advice_time_stats(ojo_engine)
-        if not time_stats_df.empty:
-            time_stats_df.to_sql('advice_time_stats_snapshot', con=analysis_engine, if_exists='replace', index=False)
-            print("상담 시간대별 통계 스냅샷 적재 완료")
-    except Exception as e:
-        print(f"상담 통계 분석 중 에러 발생: {e}")
-
-    # 요금제별 이탈률 스냅샷 저장    
+    # 요금제별 이탈률 스냅샷 저장
     sub_result = calculate_subscription(ojo_engine)
+    if not sub_result['product_churn'].empty:
+        sub_result['product_churn'].to_sql('churn_snapshot', con=analysis_engine, if_exists='replace', index=False)
 
-    if isinstance(sub_result, dict):
-        if not sub_result['conversions'].empty:
-            sub_result['conversions'].to_sql('conversion_snapshot', con=analysis_engine, if_exists='replace', index=False) 
-        if not sub_result['product_churn'].empty:
-            sub_result['product_churn'].to_sql('churn_snapshot', con=analysis_engine, if_exists='replace', index=False) 
-        if not sub_result['top_reasons'].empty:
-            sub_result['top_reasons'].to_sql('reason_snapshot', con=analysis_engine, if_exists='replace', index=False)         
-
-    
     # 지역별 분석 결과 스냅샷 저장
     region_stats = calculate_regional_sales(ojo_engine)
-    if region_stats: 
+    if region_stats:
         region_df = pd.DataFrame(region_stats)
         region_df.to_sql('region_snapshot', con=analysis_engine, if_exists='replace', index=False)
 
-    print("분석 결과 적재 완료 (ojo_analysis)")    
-    
-        # 이탈 예측 스냅샷 저장
+    print("분석 결과 적재 완료 (ojo_analysis)")
+
+    # 이탈 예측 스냅샷 저장
     print("이탈 예측 분석 시작...")
     try:
         churn_result = calculate_churn_prediction(ojo_engine)
@@ -93,14 +76,20 @@ def run_analysis_pipeline():
     except Exception as e:
         print(f"이탈 예측 분석 중 에러 발생: {e}")
 
+
+def clean_df(df):
+    if df.empty:
+        return []
+    df = df.replace([np.inf, -np.inf], np.nan)
+    return df.where(pd.notnull(df), None).to_dict(orient='records')
+
+
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
-    # 사용자가 API를 찌르면, 파이프라인 함수를 백그라운드 작업으로 던져놓습니다.
     background_tasks.add_task(run_analysis_pipeline)
-    
-    # 분석이 끝나길 기다리지 않고 바로 성공 응답을 줍니다! (타임아웃 방지)
+
     return {
-        "status": "started", 
+        "status": "started",
         "message": "다차원 분석 및 스냅샷 적재를 백그라운드에서 안전하게 시작합니다."
     }
 
@@ -110,49 +99,65 @@ def get_member_ltv(memberId: str):
     df = pd.read_sql(f"SELECT * FROM ltv_snapshot WHERE member_id = '{memberId}'", con=analysis_engine)
     return {"status": "success", "data": df.to_dict(orient='records')[0] if not df.empty else {}}
 
+
 @app.get("/api/analysis/cohort")
 def get_cohort(segment: str = 'all'):
     query = f"SELECT * FROM cohort_snapshot WHERE segment_type = '{segment}'"
     df = pd.read_sql(query, con=analysis_engine)
-    
+
     if df.empty:
         return {"status": "error", "message": f"No data found for segment: {segment}"}
 
-    # JSON 에러 방지 처리 (기존 로직 유지)
     df = df.replace([np.inf, -np.inf], np.nan)
     result = df.to_dict(orient='records')
     clean_result = [{k: (None if pd.isna(v) else v) for k, v in record.items()} for record in result]
-    
+
     return {"status": "success", "segment": segment, "data": clean_result}
 
+
+# 추후 삭제될 수도 있음
 @app.get("/api/analysis/dashboard")
 def get_dashboard():
     summary = pd.read_sql("SELECT * FROM rfm_kpi", con=ojo_engine)
     return {"status": "success", "data": summary.to_dict(orient='records')}
 
-# 상담 시간대별 통계
-@app.get("/api/advice/time")
-def get_advice_time_stats():
-    try:
-        query = "SELECT * FROM advice_time_stats_snapshot ORDER BY hour"
-        df = pd.read_sql(query, con=analysis_engine)
-        
-        return {
-            "status": "success", 
-            "data": df.to_dict(orient='records'),
-            "message": None
+
+# 요금제 통계
+@app.get("/api/analysis/churn")
+async def get_subscription():
+    result = calculate_subscription(ojo_engine)
+
+    if not result['conversions'].empty:
+        result['conversions']['start_month'] = result['conversions']['start_month'].astype(str)
+
+    return {
+        "status": "SUCCESS",
+        "data": {
+            "conversions": result['conversions'].to_dict(orient='records'),
+            "product_churn": result['product_churn'].to_dict(orient='records'),
+            "top_reasons": result['top_reasons'].to_dict(orient='records')
         }
-    except Exception as e:
-        return {"status": "error", "data": None, "message": str(e)}
+    }
+
+
+# 지역 통계
+@app.get("/api/analysis/region")
+async def get_regional_sales():
+    try:
+        df = pd.read_sql("SELECT * FROM region_snapshot", con=analysis_engine)
+        return {"status": "SUCCESS", "data": clean_df(df)}
+    except Exception:
+        return {"status": "SUCCESS", "data": []}
+
 
 # 고객별 상담 타임라인
 @app.get("/api/advice/timeline/{memberId}")
 def get_member_timeline(memberId: int):
     try:
         df = get_member_advice_timeline(ojo_engine, memberId)
-        
+
         return {
-            "status": "success", 
+            "status": "success",
             "data": {
                 "memberId": memberId,
                 "timeline": df.to_dict(orient='records') if not df.empty else []
@@ -161,38 +166,8 @@ def get_member_timeline(memberId: int):
         }
     except Exception as e:
         return {"status": "error", "data": None, "message": str(e)}
-# 요금제 통계
-@app.get("/api/analysis/churn")
-async def get_subscription():
-    try:
-        conversions = pd.read_sql("SELECT * FROM conversion_snapshot", con=analysis_engine)
-        churn = pd.read_sql("SELECT * FROM churn_snapshot", con=analysis_engine)
-        reasons = pd.read_sql("SELECT * FROM reason_snapshot", con=analysis_engine)
 
-        return {
-            "status": "SUCCESS",
-            "data": {
-                "conversions": conversions.to_dict(orient='records'),
-                "product_churn": churn.to_dict(orient='records'),
-                "top_reasons": reasons.to_dict(orient='records')
-            }
-        }
-    except Exception as e:
-        return {"status": "ERROR", "message": f"데이터가 아직 준비되지 않았습니다: {str(e)}"}
-# 지역 통계
-@app.get("/api/analysis/region")
-async def get_regional_sales():
-    try:
-        df = pd.read_sql("SELECT * FROM region_snapshot", con=analysis_engine)
-        return {"status": "SUCCESS", "data": df.to_dict(orient='records')}
-    except Exception:
-        return {"status": "ERROR", "message": "데이터를 불러올 수 없습니다."}
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-    
-    
 @app.get("/api/predictions/churn")
 async def get_churn_prediction():
     try:
@@ -217,3 +192,8 @@ async def get_churn_prediction():
             "data": None,
             "message": "fail"
         }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

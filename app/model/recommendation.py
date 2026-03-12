@@ -1,6 +1,6 @@
 # CREATE VIEW v_member_ai_features AS
 # SELECT 
-#     m.member_id, m.gender, m.birth_date, m.region, m.household_type,
+#     m.member_id, m.gender, m.birth_date, m.region, m.household_type, m.join_date,
 #     fu.total_usage_amount, fu.usage_active_days_30d, fu.usage_peak_hour, -- 사용 패턴
 #     fm.total_revenue, fm.avg_monthly_bill, fm.payment_delay_count, -- 결제 패턴
 #     fc.top_consult_category, fc.total_complaint_count, -- 상담 패턴
@@ -97,7 +97,44 @@ def recommendation_engine(ojo_engine, analysis_engine):
             idx = candidates['product_name'].str.contains('가족|결합|투게더') # 실제로는 U+투게더 결합, 참 쉬운 가족 결합 ,신혼플러스 결합, 참 쉬운 케이블 가족 결합
             candidates.loc[idx, 'score'] += 30
             candidates.loc[idx, 'reason'] += "다인 가구 고객님을 위한 가족 결합 할인 상품입니다.\n"
-        # 지역, 잠재 vip, 상담 이력, rfm에 따라 낮은 값 올리기 위한 추천
+
+        # 가입 기간에 따른 추천
+        if pd.notnull(member['join_date']):
+            join_date = pd.to_datetime(member['join_date'])
+            calculation_base_date = datetime(datetime.now().year, 11, 30)
+            tenure_years = (calculation_base_date - join_date).days // 365
+            
+            # 장기 고객 (2년, 5년, 10년 이상) - 결합 할인 및 VIP 혜택 강조
+            # 장기 고객 전용 혜택 필요(현재 존재하지 않는 거 같음)
+            # 실제 로직은 약간 변경 필요
+            if tenure_years >= 10:
+                # 장기 고객은 이탈 방지용 락인 ex. 가족 결합 상품 - 다른 정책으로 변경 필요
+                idx_family = candidates['product_name'].str.contains('가족|결합|투게더')
+                candidates.loc[idx_family, 'score'] += 50
+                candidates.loc[idx_family, 'reason'] += "장기 고객 할인 혜택이 적용 가능한 결합 상품입니다.\n" 
+
+                idx_addon = candidates['product_category'] == 'ADDON_SERVICE'
+                candidates.loc[idx_addon, 'score'] += 20
+                candidates.loc[idx_addon, 'reason'] += "우수 고객님께 제공되는 멤버십 연계 부가서비스입니다.\n"
+            elif tenure_years >= 5:
+                # 고가치 상품 유도
+                idx = (candidates['product_category'] == 'BASE') & (candidates['price'] >= 69000)
+                candidates.loc[idx, 'score'] += 40
+                candidates.loc[idx, 'reason'] += f"오랜 기간 함께해주신 {tenure_years}년차 우수 고객님을 위한 프리미엄 혜택입니다.\n"    
+            elif tenure_years >= 2:
+                # 고가치 상품 유도
+                idx = (candidates['product_category'] == 'BASE') & (candidates['price'] >= 69000)
+                candidates.loc[idx, 'score'] += 25
+                candidates.loc[idx, 'reason'] += f"오랜 기간 함께해주신 {tenure_years}년차 우수 고객님을 위한 프리미엄 혜택입니다.\n"
+                                      
+            # 신규 고객 (1년 미만) - 적응 및 부가서비스 체험 유도
+            else:
+                # 첫 달 혜택이나 가성비 요금제, 부가서비스 추천
+                idx = candidates['product_category'] == 'ADDON_SERVICE'
+                candidates.loc[idx, 'score'] += 30
+                candidates.loc[idx, 'reason'] += "초기 가입 고객님을 위한 맞춤형 실속 상품입니다.\n"
+
+        # 추가 가능 요소 - 지역, 잠재 vip, 상담 이력, rfm에 따라 낮은 값 올리기 위한 추천
 
         # top3 제공
         top_candidates = candidates[candidates['score'] > 0].sort_values(by='score', ascending=False).head(3)

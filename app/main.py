@@ -1,6 +1,9 @@
 from fastapi import FastAPI, BackgroundTasks, Path
 import pandas as pd
 import numpy as np
+import io
+from datetime import datetime
+from fastapi.responses import StreamingResponse
 from .database import ojo_engine, analysis_engine
 from .analyzer.ltv_analyzer import calculate_ltv
 from .analyzer.cohort_analyzer import calculate_segmented_cohort
@@ -15,6 +18,7 @@ app = FastAPI(title="High-5 Data Science Server")
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:5173",
     "http://high5-ojo.s3-website.ap-northeast-2.amazonaws.com"
 ]
 
@@ -153,6 +157,53 @@ def get_member_timeline(memberId: int):
         }
     except Exception as e:
         return {"status": "error", "data": None, "message": str(e)}
+
+
+@app.get("/api/analysis/report/export")
+def export_analysis_report():
+    try:
+        #메모리 버퍼 생성 (가상의 엑셀 파일)
+        output = io.BytesIO()
+        
+        #Pandas ExcelWriter를 사용해 여러 시트(Tab) 작성
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            
+            df_cohort = pd.read_sql("SELECT * FROM cohort_snapshot", con=analysis_engine)
+            if not df_cohort.empty:
+                df_cohort.to_excel(writer, sheet_name="코호트_분석", index=False)
+
+            df_region = pd.read_sql("SELECT * FROM region_snapshot", con=analysis_engine)
+            if not df_region.empty:
+                df_region.to_excel(writer, sheet_name="지역별_매출", index=False)
+
+            df_ltv = pd.read_sql("SELECT * FROM ltv_snapshot", con=analysis_engine)
+            if not df_ltv.empty:
+                df_ltv.to_excel(writer, sheet_name="LTV_분석", index=False)
+
+            df_churn = pd.read_sql("SELECT * FROM churn_snapshot", con=analysis_engine)
+            if not df_churn.empty:
+                df_churn.to_excel(writer, sheet_name="요금제_이탈률", index=False)
+
+        output.seek(0)
+        
+        #다운로드 파일명 생성 (예: analysis_report_20260311.xlsx)
+        today_str = datetime.now().strftime("%Y%m%d")
+        filename = f"analysis_report_{today_str}.xlsx"
+        
+        #브라우저가 파일 다운로드로 인식하도록 헤더 설정
+        headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"'
+        }
+        
+        #스트리밍 방식으로 엑셀 파일 전송
+        return StreamingResponse(
+            output, 
+            headers=headers, 
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        
+    except Exception as e:
+        return {"status": "error", "message": f"보고서 생성 중 오류 발생: {str(e)}"}
 
 if __name__ == "__main__":
     import uvicorn

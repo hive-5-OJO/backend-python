@@ -7,3 +7,4 @@ python-dotenv
 scikit-learn
 numpy
 cryptography>=41.0.0
+openpyxl>=3.1.0

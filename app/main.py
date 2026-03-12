@@ -7,6 +7,7 @@ from .analyzer.cohort_analyzer import calculate_segmented_cohort
 from .analyzer.subscription_analyzer import calculate_subscription
 from .analyzer.regional_sales_analyzer import calculate_regional_sales
 from .analyzer.advice_analyzer import get_member_advice_timeline
+from .model.recommendation import recommendation_engine
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -49,6 +50,14 @@ def run_analysis_pipeline():
         region_df.to_sql('region_snapshot', con=analysis_engine, if_exists='replace', index=False)
 
     print("분석 결과 적재 완료 (ojo_analysis)")
+
+    # 맞춤 추천
+    try:
+        print("[AI 추천] 고객별 맞춤 상품 추천 계산 시작...")
+        recommendation_engine(ojo_engine, analysis_engine) 
+        print("[AI 추천] 추천 결과 스냅샷(recommend_snapshot) 적재 완료")
+    except Exception as e:
+        print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")
 
 def clean_df(df):
     if df.empty: return []
@@ -137,6 +146,24 @@ def get_member_timeline(memberId: int):
         }
     except Exception as e:
         return {"status": "error", "data": None, "message": str(e)}
+
+# 맞춤 상품 추천
+@app.get("/api/analysis/recommend/{memberId}")
+def get_member_recommendation(memberId: int):
+    """특정 고객의 맞춤형 추천 상품 Top 3 조회"""
+    try:
+        query = f"SELECT * FROM recommend_snapshot WHERE member_id = {memberId} ORDER BY rank ASC"
+        df = pd.read_sql(query, con=analysis_engine)
+        
+        if df.empty:
+            return {"status": "success", "data": [], "message": "추천 데이터가 없습니다."}
+            
+        return {
+            "status": "success",
+            "data": df.to_dict(orient='records')
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}    
 
 if __name__ == "__main__":
     import uvicorn

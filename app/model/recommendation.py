@@ -1,33 +1,43 @@
-# CREATE VIEW v_member_ai_features AS
-# SELECT 
-#     m.member_id, m.gender, m.birth_date, m.region, m.household_type, m.join_date,
-#     fu.total_usage_amount, fu.usage_active_days_30d, fu.usage_peak_hour, -- 사용 패턴
-#     fm.total_revenue, fm.avg_monthly_bill, fm.payment_delay_count, -- 결제 패턴
-#     fc.top_consult_category, fc.total_complaint_count, -- 상담 패턴
-#     cp.churn_score, cp.risk_grade, -- 이탈 예측
-#     an.rfm_score, an.type as rfm_type, an.ltv, -- 가치 분석
-#     sp.product_id as current_product_id -- 현재 사용 중인 상품
-# FROM member m
-# LEFT JOIN feature_usage fu ON m.member_id = fu.member_id
-# LEFT JOIN feature_monetary fm ON m.member_id = fm.member_id
-# LEFT JOIN feature_consultation fc ON m.member_id = fc.member_id
-# LEFT JOIN churn_prediction cp ON m.member_id = cp.member_id
-# LEFT JOIN analysis an ON m.member_id = an.member_id
-# LEFT JOIN subscription_period sp ON m.member_id = sp.member_id AND sp.status = 'ACTIVE';
-
 import pandas as pd
 from datetime import datetime
 
 def recommendation_engine(ojo_engine, analysis_engine):
-    members = pd.read_sql("SELECT * FROM v_member_ai_features", con=ojo_engine)
+    members = pd.read_sql("""
+        SELECT m.member_id, m.gender, m.birth_date, m.region, m.household_type, m.join_date,
+               fu.total_usage_amount, fu.usage_active_days_30d, fu.usage_peak_hour,
+               fm.total_revenue, fm.avg_monthly_bill, fm.payment_delay_count,
+               fc.top_consult_category, fc.total_complaint_count,
+               an.rfm_score, an.type as rfm_type, an.ltv,
+               sp.product_id as current_product_id            
+        FROM member m
+        LEFT JOIN feature_usage fu ON m.member_id = fu.member_id
+        LEFT JOIN feature_monetary fm ON m.member_id = fm.member_id
+        LEFT JOIN feature_consultation fc ON m.member_id = fc.member_id
+        LEFT JOIN analysis an ON m.member_id = an.member_id    
+        LEFT JOIN subscription_period sp ON m.member_id = sp.member_id AND sp.status = 'ACTIVE'
+    """, con=ojo_engine)
     products = pd.read_sql("SELECT * FROM product", con=ojo_engine)
+    current_subs = pd.read_sql("SELECT member_id, product_id as current_product_id FROM subscription_period WHERE status = 'ACTIVE'", con=ojo_engine)
     offered_promotions = pd.read_sql("SELECT member_id, promotion_id FROM advice WHERE promotion_id IS NOT NULL", con=ojo_engine)
     promotions = pd.read_sql("SELECT * FROM promotion", con=ojo_engine)
+
+    churn_pred = pd.read_sql("SELECT member_id, churn_score, risk_grade FROM churn_prediction_snapshot", con=analysis_engine)
+    ltv_stats = pd.read_sql("SELECT member_id, ltv FROM ltv_snapshot", con=analysis_engine)
+
+    for d in [members, current_subs, churn_pred, ltv_stats]:
+        d['member_id'] = d['member_id'].astype(int)
+
+    df = members.merge(current_subs, on='member_id', how='left')
+    df = df.merge(churn_pred, on='member_id', how='left')
+    df = df.merge(ltv_stats, on='member_id', how='left')
+
+    df = df.drop_duplicates(subset=['member_id'])
+    
     recommendations = []
 
     current_year = datetime.now().year
 
-    for _, member in members.iterrows():
+    for _, member in df.iterrows():
         # 사용 중인 상품 제외
         candidates = products[products['product_id'] != member['current_product_id']].copy()
         candidates['score'] = 0.0

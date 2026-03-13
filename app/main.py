@@ -143,9 +143,11 @@ async def make_analysis(background_tasks: BackgroundTasks):
 # 조회 API
 @app.get("/api/analysis/ltv/{memberId}")
 def get_member_ltv(memberId: str):
-    df = pd.read_sql(f"SELECT * FROM ltv_snapshot WHERE member_id = '{memberId}'", con=analysis_engine)
-    return {"status": "success", "data": df.to_dict(orient='records')[0] if not df.empty else {}}
-
+    df = pd.read_sql(f"SELECT * FROM ltv_snapshot WHERE member_id = :memberId", con=analysis_engine, params={"memberId": memberId})
+    if not df.empty:
+        return {"status": "success", "data": df.to_dict(orient='records')[0]}
+    else:
+        return {"status": "error", "message": f"{memberId} ltv 조회 실패", "data": {}}
 
 @app.get("/api/analysis/cohort")
 def get_cohort(segment: str = 'all'):

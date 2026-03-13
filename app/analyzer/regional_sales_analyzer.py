@@ -60,17 +60,17 @@ def calculate_regional_sales(ojo_engine, analysis_engine):
     merged_df["risk_grade"] = merged_df["risk_grade"].fillna("SAFE")
 
     # 4. 지역별 집계
-    stats = merged_df.groupby("region").apply(lambda x: pd.Series({
-        "count": len(x),
-        "ratio": round(len(x) / len(merged_df) * 100, 2) if len(merged_df) > 0 else 0,
-        "totalRevenue": x["total_revenue"].sum(),
-        "totalMonthlyRevenue": x["monthly_revenue"].sum(),
-        "avgRevenue": x["total_revenue"].mean(),
-        "avgMonthlyRevenue": x["monthly_revenue"].mean(),
-        "vipCount": (x["type"] == "VIP").sum(),
-        "churnRiskCount": (x["risk_grade"] == "DANGER").sum()
-    })).reset_index()
+    stats = merged_df.groupby("region").agg(
+        count=('member_id', 'count'),
+        totalRevenue=('total_revenue', 'sum'),
+        totalMonthlyRevenue=('monthly_revenue', 'sum'),
+        avgRevenue=('total_revenue', 'mean'),
+        avgMonthlyRevenue=('monthly_revenue', 'mean'),
+        vipCount=('type', lambda x: (x == "VIP").sum()),
+        churnRiskCount=('risk_grade', lambda x: (x == "DANGER").sum())
+    ).reset_index()
 
+    stats["ratio"] = (stats["count"] / len(merged_df) * 100).round(2) if len(merged_df) > 0 else 0
     stats["churnRiskRatio"] = (
         stats["churnRiskCount"] / stats["count"].replace(0, 1) * 100
     ).round(2)

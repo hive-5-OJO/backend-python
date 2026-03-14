@@ -155,10 +155,10 @@ def get_recommendations(ojo_engine, analysis_engine):
             roaming_mask = (df['last_consult_category'] == 18) # 로밍 관련 ID
             scores += np.where(roaming_mask, 50, 0)
             reasons = np.where(roaming_mask, reasons +"최근 로밍 상담을 바탕으로 가장 인기 있는 로밍 상품을 추천합니다. ", reasons)
-        if p['product_category'] == 'BASE' and p['price'] < 50000:
-            churn_mask = (df['churn_score'] > 0.8) | (df['last_consult_category'] == 19) # 해지 상담
-            scores += np.where(churn_mask, 40, 0)
-            reasons = np.where(churn_mask, reasons +"고객님을 위한 특별 할인 요금제와 혜택을 확인해보세요. ", reasons)    
+        # if p['product_category'] == 'BASE' and p['price'] < 50000:
+        #     churn_mask = (df['churn_score'] > 0.8) | (df['last_consult_category'] == 19) # 해지 상담
+        #     scores += np.where(churn_mask, 40, 0)
+        #     reasons = np.where(churn_mask, reasons +"고객님을 위한 특별 할인 요금제와 혜택을 확인해보세요. ", reasons)    
 
         valid_idx = np.where(scores >= 30)[0]
         for i in valid_idx:
@@ -202,12 +202,12 @@ def get_recommendations(member_id, ojo_engine):
     if df[df['member_id'] == member_id].empty: return []
     products = pd.read_sql("SELECT * FROM product", con=ojo_engine)
 
+    current_year = datetime.now().year
+    df['age'] = current_year - pd.to_datetime(df['birth_date']).dt.year
+
     # 대상 고객 정보 추출
     target_user = df[df['member_id'] == member_id].iloc[0]
     target_data_limit = DATA_LIMIT_MAP.get(target_user['current_product_name'], 0)
-
-    current_year = datetime.now().year
-    df['age'] = current_year - pd.to_datetime(df['birth_date']).dt.year
     age = target_user['age']
 
     features = ['household_type', 'total_usage_amount', 'usage_active_days_30d', 'avg_monthly_bill', 
@@ -221,7 +221,7 @@ def get_recommendations(member_id, ojo_engine):
     user_sim_series = pd.Series(user_sim, index=df['member_id'])
 
     # 대상 고객과 가장 유사한 상위 10명 추출
-    similar_users = user_sim_series[member_id].sort_values(ascending=False).iloc[1:11].index
+    similar_users = user_sim_series.sort_values(ascending=False).iloc[1:11].index
 
     # 유사한 사용자들이 가장 많이 사용하는 상품 집계 (현재 내 상품 제외)
     # target_user_product = df[df['member_id'] == member_id]['current_product_id'].values[0]
@@ -246,22 +246,22 @@ def get_recommendations(member_id, ojo_engine):
         if '키즈' in p['product_name']:
             if age <= 12:
                 scores += 20    
-                reasons += f"어린이 고객님(만 {age}세)을 위한 맞춤 요금제입니다."
+                reasons.append(f"어린이 고객님(만 {age}세)을 위한 맞춤 요금제입니다.")
             else: age_match = False
         elif '청소년' in p['product_name']:
             if 12 < age <= 18:
                 scores += 20
-                reasons += f"청소년 고객님(만 {age}세)을 위한 맞춤 요금제입니다."
+                reasons.append(f"청소년 고객님(만 {age}세)을 위한 맞춤 요금제입니다.")
             else: age_match = False
         elif '유쓰' in p['product_name']:
             if 18 < age <= 34:
                 scores += 20
-                reasons += f"청년 고객님(만 {age}세)을 위한 맞춤 요금제입니다."
+                reasons.append(f"청년 고객님(만 {age}세)을 위한 맞춤 요금제입니다.")
             else: age_match = False
         elif '시니어' in p['product_name']:
             if age >= 65:
                 scores += 20
-                reasons += f"실버 고객님(만 {age}세)을 위한 맞춤 요금제입니다." 
+                reasons.append(f"실버 고객님(만 {age}세)을 위한 맞춤 요금제입니다.") 
             else: age_match = False
         if not age_match: continue
 
@@ -274,7 +274,7 @@ def get_recommendations(member_id, ojo_engine):
         # 가족 구성 3인 이상이면 결합 상품 추천 => db에 lg u+ 결합 상품 추가(U+투게더 결합, 참 쉬운 가족 결합 ,신혼플러스 결합, 참 쉬운 케이블 가족 결합)
         if any(k in p['product_name'] for k in ['가족', '결합', '투게더']):
             if target_user['household_type'] >= 3:
-                score += 20
+                scores += 20
                 reasons.append("다인 가구 맞춤 결합 상품으로 통신비를 절감해보세요. ")
 
         # 가입 기간 - 15점
@@ -317,9 +317,9 @@ def get_recommendations(member_id, ojo_engine):
         if '로밍' in p['product_name'] and target_user['last_consult_category'] == 18: # 로밍 관련 ID 
             scores += 50
             reasons.append("최근 로밍 상담을 바탕으로 가장 인기 있는 로밍 상품을 추천합니다. ")
-        if p['product_category'] == 'BASE' and p['price'] < 50000 and (target_user['churn_score'] > 0.8) | (target_user['last_consult_category'] == 19): # 해지 상담
-            scores += 40
-            reasons.append("고객님을 위한 특별 할인 요금제와 혜택을 확인해보세요. ")    
+        # if p['product_category'] == 'BASE' and p['price'] < 50000 and (target_user['churn_score'] > 0.8) | (target_user['last_consult_category'] == 19): # 해지 상담
+        #     scores += 40
+        #     reasons.append("고객님을 위한 특별 할인 요금제와 혜택을 확인해보세요. ")    
 
         if scores >= 30:
             recommendations.append({
@@ -332,6 +332,8 @@ def get_recommendations(member_id, ojo_engine):
   
     if not recommendations: return []
     final_res = pd.DataFrame(recommendations)
-
-    final_res['rank'] = final_res.groupby('member_id')['score'].rank(ascending=False, method='first').astype(int)
-    return final_res[final_res['rank'] <= 3].to_dict('records')
+    
+    final_res = final_res.sort_values(by='score', ascending=False)
+    final_res['rank'] = range(1, len(final_res) + 1)
+    final_res['created_at'] = datetime.now().strftime('%Y-%m-%d')
+    return final_res.head(3).to_dict(orient='records')

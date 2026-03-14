@@ -123,12 +123,12 @@ def run_analysis_pipeline():
     print("분석 결과 적재 완료 (ojo_analysis)")
 
     # 맞춤 추천
-    # try:
-    #     print("[AI 추천] 고객별 맞춤 상품 추천 계산 시작...")
-    #     recommendation_engine(ojo_engine, analysis_engine) 
-    #     print("[AI 추천] 추천 결과 스냅샷(recommend_snapshot) 적재 완료")
-    # except Exception as e:
-    #     print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")
+    try:
+        print("[AI 추천] 고객별 맞춤 상품 추천 계산 시작...")
+        get_recommendations(ojo_engine, analysis_engine) 
+        print("[AI 추천] 추천 결과 스냅샷(recommend_snapshot) 적재 완료")
+    except Exception as e:
+        print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):

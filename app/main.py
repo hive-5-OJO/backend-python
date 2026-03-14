@@ -8,8 +8,9 @@ from .analyzer.cohort_analyzer import calculate_segmented_cohort
 from .analyzer.advice_analyzer import get_member_advice_timeline
 from .analyzer.subscription_analyzer import calculate_subscription
 from .analyzer.regional_sales_analyzer import calculate_regional_sales
-from .analyzer.churn_prediction_analyzer import calculate_churn_prediction
 from .model.recommendation import recommendation_engine
+from app.analyzer.churn_prediction_analyzer import calculate_churn_prediction
+
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -213,27 +214,30 @@ async def get_regional_sales():
 @app.get("/api/predictions/churn")
 async def get_churn_prediction():
     try:
-        df = pd.read_sql(
-            "SELECT * FROM churn_prediction_summary_snapshot",
-            con=analysis_engine
-        )
+        result = calculate_churn_prediction()
 
-        total_count = int(df["count"].sum()) if not df.empty else 0
+        detail_df = result["detail"]
+        summary_df = result["summary"]
+
+        total_count = int(len(detail_df)) if not detail_df.empty else 0
 
         return {
             "status": "success",
             "data": {
                 "totalAnalyzed": total_count,
-                "riskDistribution": df.to_dict(orient="records") if not df.empty else []
+                "riskDistribution": summary_df.to_dict(orient="records") if not summary_df.empty else [],
+                "detail": detail_df.to_dict(orient="records") if not detail_df.empty else []
             },
             "message": None
         }
+
     except Exception as e:
         return {
             "status": "error",
             "data": None,
-            "message": "fail"
+            "message": str(e)
         }
+
    
 # 맞춤 상품 추천
 @app.get("/api/analysis/recommend/{memberId}")

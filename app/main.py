@@ -9,7 +9,7 @@ from .analyzer.advice_analyzer import get_member_advice_timeline
 from .analyzer.subscription_analyzer import calculate_subscription
 from .analyzer.regional_sales_analyzer import calculate_regional_sales
 from .analyzer.churn_prediction_analyzer import calculate_churn_prediction
-from .model.recommendation import recommendation_engine
+from .model.recommendation import get_recommendations
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -123,12 +123,12 @@ def run_analysis_pipeline():
     print("분석 결과 적재 완료 (ojo_analysis)")
 
     # 맞춤 추천
-    try:
-        print("[AI 추천] 고객별 맞춤 상품 추천 계산 시작...")
-        recommendation_engine(ojo_engine, analysis_engine) 
-        print("[AI 추천] 추천 결과 스냅샷(recommend_snapshot) 적재 완료")
-    except Exception as e:
-        print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")
+    # try:
+    #     print("[AI 추천] 고객별 맞춤 상품 추천 계산 시작...")
+    #     recommendation_engine(ojo_engine, analysis_engine) 
+    #     print("[AI 추천] 추천 결과 스냅샷(recommend_snapshot) 적재 완료")
+    # except Exception as e:
+    #     print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
@@ -240,15 +240,14 @@ async def get_churn_prediction():
 def get_member_recommendation(memberId: int):
     """특정 고객의 맞춤형 추천 상품 Top 3 조회"""
     try:
-        query = f"SELECT * FROM recommend_snapshot WHERE member_id = {memberId} ORDER BY rank ASC"
-        df = pd.read_sql(query, con=analysis_engine)
+        data = get_recommendations(memberId, ojo_engine)
         
-        if df.empty:
+        if not data:
             return {"status": "success", "data": [], "message": "추천 데이터가 없습니다."}
             
         return {
             "status": "success",
-            "data": df.to_dict(orient='records')
+            "data": data
         }
     except Exception as e:
         return {"status": "error", "message": str(e)} 

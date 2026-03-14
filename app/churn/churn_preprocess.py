@@ -40,13 +40,14 @@ def add_derived_features(df: pd.DataFrame) -> pd.DataFrame:
     result = df.copy()
 
     # 날짜 파싱
+    result["feature_base_date"] = pd.to_datetime(result["feature_base_date"], errors="coerce")
     result["birth_date"] = pd.to_datetime(result["birth_date"], errors="coerce")
     result["created_at"] = pd.to_datetime(result["created_at"], errors="coerce")
     result["signup_date"] = pd.to_datetime(result["signup_date"], errors="coerce")
 
     # age 파생
-    today = pd.Timestamp.today().normalize()
-    result["age"] = ((today - result["birth_date"]).dt.days / 365.25).fillna(0).astype(int)
+    ref_date = result["feature_base_date"].dt.normalize()
+    result["age"] = ((ref_date - result["birth_date"]).dt.days / 365.25).fillna(0).astype(int)
 
     # Y/N -> 1/0
     yn_cols = ["is_vip_prev_month", "is_dormant_flag", "is_new_customer_flag"]

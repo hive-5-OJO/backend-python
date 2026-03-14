@@ -1,20 +1,5 @@
-import os
 import pandas as pd
-from sqlalchemy import create_engine
-from dotenv import load_dotenv
-
-load_dotenv()
-
-
-def get_engine():
-    db_user = os.environ["DB_USER"]
-    db_password = os.environ["DB_PASSWORD"]
-    db_host = os.environ["DB_HOST"]
-    db_port = os.environ["DB_PORT"]
-    db_name = os.environ["DB_NAME"]
-
-    url = f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
-    return create_engine(url)
+from app.database import ojo_engine
 
 
 def load_feature_consultation() -> pd.DataFrame:
@@ -34,7 +19,7 @@ def load_feature_consultation() -> pd.DataFrame:
         last_consult_days_ago
     FROM feature_consultation
     """
-    return pd.read_sql(query, get_engine())
+    return pd.read_sql(query, ojo_engine)
 
 
 def load_feature_monetary() -> pd.DataFrame:
@@ -55,7 +40,7 @@ def load_feature_monetary() -> pd.DataFrame:
         purchase_cycle
     FROM feature_monetary
     """
-    return pd.read_sql(query, get_engine())
+    return pd.read_sql(query, ojo_engine)
 
 
 def load_feature_lifecycle() -> pd.DataFrame:
@@ -72,7 +57,7 @@ def load_feature_lifecycle() -> pd.DataFrame:
         signup_date
     FROM feature_lifecycle
     """
-    return pd.read_sql(query, get_engine())
+    return pd.read_sql(query, ojo_engine)
 
 
 def load_feature_usage() -> pd.DataFrame:
@@ -89,7 +74,7 @@ def load_feature_usage() -> pd.DataFrame:
         usage_active_days_30d
     FROM feature_usage
     """
-    return pd.read_sql(query, get_engine())
+    return pd.read_sql(query, ojo_engine)
 
 
 def load_member() -> pd.DataFrame:
@@ -104,7 +89,7 @@ def load_member() -> pd.DataFrame:
         created_at
     FROM member
     """
-    return pd.read_sql(query, get_engine())
+    return pd.read_sql(query, ojo_engine)
 
 
 def load_main_subscription_period() -> pd.DataFrame:
@@ -123,4 +108,4 @@ def load_main_subscription_period() -> pd.DataFrame:
       ON sp.product_id = p.product_id
     WHERE p.product_category = 'BASE'
     """
-    return pd.read_sql(query, get_engine())
+    return pd.read_sql(query, ojo_engine)

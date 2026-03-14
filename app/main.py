@@ -222,7 +222,7 @@ async def get_regional_sales():
 @app.get("/api/predictions/churn")
 async def get_churn_prediction():
     try:
-        result = calculate_churn_prediction()
+        result = calculate_churn_prediction(ojo_engine)
 
         detail_df = result["detail"]
         summary_df = result["summary"]

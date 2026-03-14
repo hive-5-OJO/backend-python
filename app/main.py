@@ -2,6 +2,7 @@ from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import numpy as np
+import traceback
 from .database import ojo_engine, analysis_engine
 from .analyzer.ltv_analyzer import calculate_ltv
 from .analyzer.cohort_analyzer import calculate_segmented_cohort
@@ -86,9 +87,12 @@ def run_analysis_pipeline():
             )
 
     # 5. 이탈 예측 스냅샷 저장
-    print("이탈 예측 분석 시작...")
+    print("[CHURN-ML] 이탈 예측 분석 시작...", flush=True)
     try:
         churn_result = calculate_churn_prediction(ojo_engine)
+
+        print(f"[CHURN-ML] detail rows = {len(churn_result['detail'])}", flush=True)
+        print(f"[CHURN-ML] summary rows = {len(churn_result['summary'])}", flush=True)
 
         if not churn_result["detail"].empty:
             churn_result["detail"].to_sql(
@@ -97,6 +101,7 @@ def run_analysis_pipeline():
                 if_exists='replace',
                 index=False
             )
+            print("[CHURN-ML] churn_prediction_snapshot 저장 완료", flush=True)
 
         if not churn_result["summary"].empty:
             churn_result["summary"].to_sql(
@@ -105,10 +110,13 @@ def run_analysis_pipeline():
                 if_exists='replace',
                 index=False
             )
+            print("[CHURN-ML] churn_prediction_summary_snapshot 저장 완료", flush=True)
 
-        print("이탈 예측 스냅샷 적재 완료")
+        print("[CHURN-ML] 이탈 예측 스냅샷 적재 완료", flush=True)
+
     except Exception as e:
-        print(f"이탈 예측 분석 중 에러 발생: {e}")
+        print(f"[CHURN-ML] 이탈 예측 분석 중 에러 발생: {e}", flush=True)
+        traceback.print_exc()
 
     # 6. 지역별 분석 결과 스냅샷 저장
     print("지역별 분석 시작...")

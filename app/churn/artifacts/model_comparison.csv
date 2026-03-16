@@ -1,0 +1,4 @@
+accuracy,precision,recall,f1,roc_auc,confusion_matrix,model
+0.9977,0.8,0.1509,0.254,0.8419,"[[19945, 2], [45, 8]]",HistGradientBoostingClassifier
+0.7464,0.0073,0.6981,0.0144,0.7978,"[[14891, 5056], [16, 37]]",LogisticRegression
+0.9975,1.0,0.0566,0.1071,0.6817,"[[19947, 0], [50, 3]]",RandomForestClassifier

@@ -4,7 +4,7 @@ pandas
 sqlalchemy
 pymysql
 python-dotenv
-scikit-learn
+scikit-learn==1.7.1
 numpy
 cryptography>=41.0.0
 openpyxl>=3.1.0

@@ -2,6 +2,9 @@ from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import numpy as np
+import traceback
+from datetime import datetime
+
 from .database import ojo_engine, analysis_engine
 from .analyzer.ltv_analyzer import calculate_ltv
 from .analyzer.cohort_analyzer import calculate_segmented_cohort
@@ -9,8 +12,8 @@ from .analyzer.advice_analyzer import get_member_advice_timeline
 from .analyzer.subscription_analyzer import calculate_subscription
 from .analyzer.regional_sales_analyzer import calculate_regional_sales
 from .analyzer.churn_prediction_analyzer import calculate_churn_prediction
-from .model.recommendation import recommendation_engine
 from .analyzer.rfm_analyzer import calculate_rfm_metrics
+from .model.recommendation import recommendation_engine
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -24,9 +27,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"], # GET, POST, OPTIONS 등 모든 메서드 허용
-    allow_headers=["*"], # 모든 헤더 허용
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
 
 # [분석 실행 로직] Spring이 호출함
 def run_analysis_pipeline():
@@ -58,7 +62,7 @@ def run_analysis_pipeline():
         final_cohort_df.to_sql('cohort_snapshot', con=analysis_engine, if_exists='replace', index=False)
         print(f"총 {len(segments)}개 세그먼트 코호트 적재 완료")
 
-    # 4. 요금제별 이탈률 스냅샷 저장
+    # 3. 요금제별 이탈률 스냅샷 저장
     print("요금제별 이탈 통계 분석 시작...")
     sub_result = calculate_subscription(ojo_engine)
 
@@ -85,10 +89,13 @@ def run_analysis_pipeline():
                 index=False
             )
 
-    # 5. 이탈 예측 스냅샷 저장
-    print("이탈 예측 분석 시작...")
+    # 4. 이탈 예측 스냅샷 저장
+    print("[CHURN-ML] 이탈 예측 분석 시작...", flush=True)
     try:
         churn_result = calculate_churn_prediction(ojo_engine)
+
+        print(f"[CHURN-ML] detail rows = {len(churn_result['detail'])}", flush=True)
+        print(f"[CHURN-ML] summary rows = {len(churn_result['summary'])}", flush=True)
 
         if not churn_result["detail"].empty:
             churn_result["detail"].to_sql(
@@ -97,6 +104,7 @@ def run_analysis_pipeline():
                 if_exists='replace',
                 index=False
             )
+            print("[CHURN-ML] churn_prediction_snapshot 저장 완료", flush=True)
 
         if not churn_result["summary"].empty:
             churn_result["summary"].to_sql(
@@ -105,12 +113,15 @@ def run_analysis_pipeline():
                 if_exists='replace',
                 index=False
             )
+            print("[CHURN-ML] churn_prediction_summary_snapshot 저장 완료", flush=True)
 
-        print("이탈 예측 스냅샷 적재 완료")
+        print("[CHURN-ML] 이탈 예측 스냅샷 적재 완료", flush=True)
+
     except Exception as e:
-        print(f"이탈 예측 분석 중 에러 발생: {e}")
+        print(f"[CHURN-ML] 이탈 예측 분석 중 에러 발생: {e}", flush=True)
+        traceback.print_exc()
 
-    # 6. 지역별 분석 결과 스냅샷 저장
+    # 5. 지역별 분석 결과 스냅샷 저장
     print("지역별 분석 시작...")
     try:
         region_stats = calculate_regional_sales(ojo_engine, analysis_engine)
@@ -121,47 +132,53 @@ def run_analysis_pipeline():
     except Exception as e:
         print(f"지역별 분석 중 에러 발생: {e}")
 
-    print("분석 결과 적재 완료 (ojo_analysis)")
-
-# 5. 통합 analysis 테이블 생성 (RFM 기반 자동화)
+    # 6. 통합 analysis 테이블 생성 (RFM 기반 자동화)
     print("[통합] 최종 analysis 테이블 생성 중...")
     try:
-        # DB에서 RFM 기반 세그먼트 계산해오기
         rfm_metrics_df = calculate_rfm_metrics(ojo_engine)
-        
+
         if not ltv_df.empty and not rfm_metrics_df.empty:
-            from datetime import datetime
-            
             ltv_df.columns = ltv_df.columns.str.lower()
-            
+
             analysis_final_df = ltv_df.copy()
-            
-            analysis_final_df = pd.merge(analysis_final_df, rfm_metrics_df, on='member_id', how='left')
-            
-            # 빈칸 방어
+            analysis_final_df = pd.merge(
+                analysis_final_df,
+                rfm_metrics_df,
+                on='member_id',
+                how='left'
+            )
+
             analysis_final_df['rfm_score'] = analysis_final_df['rfm_score'].fillna(0)
             analysis_final_df['type'] = analysis_final_df['type'].fillna('일반')
             analysis_final_df['lifecycle_stage'] = analysis_final_df['lifecycle_stage'].fillna('ACTIVE')
             analysis_final_df['created_at'] = datetime.now()
 
-            # 테이블 적재
             analysis_final_df[[
                 'member_id', 'ltv', 'rfm_score', 'type', 'lifecycle_stage', 'created_at'
-            ]].to_sql('analysis', con=analysis_engine, if_exists='replace', index=True, index_label='analysis_id')
-            
+            ]].to_sql(
+                'analysis',
+                con=analysis_engine,
+                if_exists='replace',
+                index=True,
+                index_label='analysis_id'
+            )
+
             print("analysis 통합 테이블 적재 성공! (RFM 모델 적용 완료)")
         else:
             print("기준이 되는 LTV나 RFM 데이터가 없어서 analysis 테이블을 만들지 못했습니다.")
     except Exception as e:
         print(f"통합 테이블 생성 중 에러: {e}")
 
-    # 맞춤 추천
+    # 7. 맞춤 추천
     try:
         print("[AI 추천] 고객별 맞춤 상품 추천 계산 시작...")
-        recommendation_engine(ojo_engine, analysis_engine) 
+        recommendation_engine(ojo_engine, analysis_engine)
         print("[AI 추천] 추천 결과 스냅샷(recommend_snapshot) 적재 완료")
     except Exception as e:
         print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")
+
+    print("분석 결과 적재 완료 (ojo_analysis)")
+
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
@@ -176,11 +193,16 @@ async def make_analysis(background_tasks: BackgroundTasks):
 # 조회 API
 @app.get("/api/analysis/ltv/{memberId}")
 def get_member_ltv(memberId: str):
-    df = pd.read_sql(f"SELECT * FROM ltv_snapshot WHERE member_id = :memberId", con=analysis_engine, params={"memberId": memberId})
+    df = pd.read_sql(
+        "SELECT * FROM ltv_snapshot WHERE member_id = :memberId",
+        con=analysis_engine,
+        params={"memberId": memberId}
+    )
     if not df.empty:
         return {"status": "success", "data": df.to_dict(orient='records')[0]}
     else:
         return {"status": "error", "message": f"{memberId} ltv 조회 실패", "data": {}}
+
 
 @app.get("/api/analysis/cohort")
 def get_cohort(segment: str = 'all'):
@@ -195,6 +217,7 @@ def get_cohort(segment: str = 'all'):
     clean_result = [{k: (None if pd.isna(v) else v) for k, v in record.items()} for record in result]
 
     return {"status": "success", "segment": segment, "data": clean_result}
+
 
 # 고객별 상담 타임라인
 @app.get("/api/advice/timeline/{memberId}")
@@ -212,6 +235,7 @@ def get_member_timeline(memberId: int):
         }
     except Exception as e:
         return {"status": "error", "data": None, "message": str(e)}
+
 
 # 요금제 통계
 @app.get("/api/analysis/churn")
@@ -242,75 +266,71 @@ async def get_regional_sales():
     except Exception:
         return {"status": "ERROR", "message": "데이터를 불러올 수 없습니다."}
 
+
 # 이탈률 예측
 @app.get("/api/predictions/churn")
 async def get_churn_prediction():
     try:
-        df = pd.read_sql(
-            "SELECT * FROM churn_prediction_summary_snapshot",
-            con=analysis_engine
-        )
+        result = calculate_churn_prediction(ojo_engine)
 
-        total_count = int(df["count"].sum()) if not df.empty else 0
+        detail_df = result["detail"]
+        summary_df = result["summary"]
+
+        total_count = int(len(detail_df)) if not detail_df.empty else 0
 
         return {
             "status": "success",
             "data": {
                 "totalAnalyzed": total_count,
-                "riskDistribution": df.to_dict(orient="records") if not df.empty else []
+                "riskDistribution": summary_df.to_dict(orient="records") if not summary_df.empty else [],
+                "detail": detail_df.to_dict(orient="records") if not detail_df.empty else []
             },
             "message": None
         }
+
     except Exception as e:
         return {
             "status": "error",
             "data": None,
-            "message": "fail"
+            "message": str(e)
         }
-   
+
+
 # 맞춤 상품 추천
 @app.get("/api/analysis/recommend/{memberId}")
 def get_member_recommendation(memberId: int):
-    """특정 고객의 맞춤형 추천 상품 Top 3 조회"""
     try:
         query = f"SELECT * FROM recommend_snapshot WHERE member_id = {memberId} ORDER BY rank ASC"
         df = pd.read_sql(query, con=analysis_engine)
-        
+
         if df.empty:
             return {"status": "success", "data": [], "message": "추천 데이터가 없습니다."}
-            
+
         return {
             "status": "success",
             "data": df.to_dict(orient='records')
         }
     except Exception as e:
-        return {"status": "error", "message": str(e)} 
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+        return {"status": "error", "message": str(e)}
 
 
-    # 통합 고객 분석 데이터 조회 (LTV, RFM, 등급, 생애주기)
+# 통합 고객 분석 데이터 조회 (LTV, RFM, 등급, 생애주기)
 @app.get("/api/analysis/customer/{memberId}")
 def get_customer_analysis(memberId: int):
     try:
-        # analysis 테이블에서 해당 고객의 가장 최근 데이터 1건 조회
         query = f"SELECT * FROM analysis WHERE member_id = {memberId} ORDER BY created_at DESC LIMIT 1"
         df = pd.read_sql(query, con=analysis_engine)
-        
+
         if df.empty:
             return {
-                "status": "success", 
-                "data": {}, 
+                "status": "success",
+                "data": {},
                 "message": "해당 고객의 분석 데이터가 아직 없습니다."
             }
-            
+
         result = df.to_dict(orient='records')[0]
-        
-        import numpy as np
         clean_result = {k: (None if pd.isna(v) else v) for k, v in result.items()}
-        
+
         return {
             "status": "success",
             "data": clean_result,
@@ -318,7 +338,12 @@ def get_customer_analysis(memberId: int):
         }
     except Exception as e:
         return {
-            "status": "error", 
+            "status": "error",
             "data": None,
             "message": f"분석 데이터 조회 중 오류 발생: {str(e)}"
         }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

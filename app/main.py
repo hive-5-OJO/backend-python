@@ -1,20 +1,27 @@
-from fastapi import FastAPI, BackgroundTasks, Path
+from fastapi import FastAPI, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse 
 import pandas as pd
 import numpy as np
 import io
+from urllib.parse import quote
+
+# 데이터베이스 및 분석 모듈
+import traceback
 from datetime import datetime
-from fastapi.responses import StreamingResponse
+
 from .database import ojo_engine, analysis_engine
 from .analyzer.ltv_analyzer import calculate_ltv
 from .analyzer.cohort_analyzer import calculate_segmented_cohort
+from .analyzer.advice_analyzer import get_member_advice_timeline
 from .analyzer.subscription_analyzer import calculate_subscription
 from .analyzer.regional_sales_analyzer import calculate_regional_sales
-from .analyzer.advice_analyzer import get_member_advice_timeline
-from fastapi.middleware.cors import CORSMiddleware
+from .analyzer.churn_prediction_analyzer import calculate_churn_prediction
+from .analyzer.rfm_analyzer import calculate_rfm_metrics
+from .model.recommendation import get_recommendations, get_all_recommendations
 
 app = FastAPI(title="High-5 Data Science Server")
 
-# 프론트엔드 개발 서버 주소
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -33,8 +40,9 @@ app.add_middleware(
 # [분석 실행 로직] Spring이 호출함
 def run_analysis_pipeline():
     print("다차원 분석 파이프라인 가동...")
-    
+
     # 1. LTV 계산 및 저장
+    print("[분석] LTV(고객 생애 가치) 계산 중...")
     ltv_df = calculate_ltv(ojo_engine)
     if not ltv_df.empty:
         ltv_df.to_sql('ltv_snapshot', con=analysis_engine, if_exists='replace', index=False)
@@ -45,28 +53,136 @@ def run_analysis_pipeline():
 
     for seg in segments:
         try:
+            print(f"[분석] {seg} 기준 코호트 분석 중...")
             df = calculate_segmented_cohort(ojo_engine, segment_type=seg)
             if not df.empty:
                 all_cohort_results.append(df)
+            else:
+                print(f"[정보] {seg} 조건에 맞는 데이터가 없습니다.")
         except Exception as e:
             print(f"{seg} 코호트 분석 중 에러 발생: {e}")
 
-    # 3. 모든 결과를 하나의 테이블로 합쳐서 저장
     if all_cohort_results:
         final_cohort_df = pd.concat(all_cohort_results, ignore_index=True)
         final_cohort_df.to_sql('cohort_snapshot', con=analysis_engine, if_exists='replace', index=False)
         print(f"총 {len(segments)}개 세그먼트 코호트 적재 완료")
 
-    # 요금제별 이탈률 스냅샷 저장    
+    # 3. 요금제별 이탈률 스냅샷 저장
+    print("요금제별 이탈 통계 분석 시작...")
     sub_result = calculate_subscription(ojo_engine)
-    if not sub_result['product_churn'].empty:
-        sub_result['product_churn'].to_sql('churn_snapshot', con=analysis_engine, if_exists='replace', index=False)    
-    
-    # 지역별 분석 결과 스냅샷 저장
-    region_stats = calculate_regional_sales(ojo_engine)
-    if region_stats: 
-        region_df = pd.DataFrame(region_stats)
-        region_df.to_sql('region_snapshot', con=analysis_engine, if_exists='replace', index=False)
+
+    if isinstance(sub_result, dict):
+        if not sub_result['conversions'].empty:
+            sub_result['conversions'].to_sql(
+                'conversion_snapshot',
+                con=analysis_engine,
+                if_exists='replace',
+                index=False
+            )
+        if not sub_result['product_churn'].empty:
+            sub_result['product_churn'].to_sql(
+                'churn_snapshot',
+                con=analysis_engine,
+                if_exists='replace',
+                index=False
+            )
+        if not sub_result['top_reasons'].empty:
+            sub_result['top_reasons'].to_sql(
+                'reason_snapshot',
+                con=analysis_engine,
+                if_exists='replace',
+                index=False
+            )
+
+    # 4. 이탈 예측 스냅샷 저장
+    print("[CHURN-ML] 이탈 예측 분석 시작...", flush=True)
+    try:
+        churn_result = calculate_churn_prediction(ojo_engine)
+
+        print(f"[CHURN-ML] detail rows = {len(churn_result['detail'])}", flush=True)
+        print(f"[CHURN-ML] summary rows = {len(churn_result['summary'])}", flush=True)
+
+        if not churn_result["detail"].empty:
+            churn_result["detail"].to_sql(
+                'churn_prediction_snapshot',
+                con=analysis_engine,
+                if_exists='replace',
+                index=False
+            )
+            print("[CHURN-ML] churn_prediction_snapshot 저장 완료", flush=True)
+
+        if not churn_result["summary"].empty:
+            churn_result["summary"].to_sql(
+                'churn_prediction_summary_snapshot',
+                con=analysis_engine,
+                if_exists='replace',
+                index=False
+            )
+            print("[CHURN-ML] churn_prediction_summary_snapshot 저장 완료", flush=True)
+
+        print("[CHURN-ML] 이탈 예측 스냅샷 적재 완료", flush=True)
+
+    except Exception as e:
+        print(f"[CHURN-ML] 이탈 예측 분석 중 에러 발생: {e}", flush=True)
+        traceback.print_exc()
+
+    # 5. 지역별 분석 결과 스냅샷 저장
+    print("지역별 분석 시작...")
+    try:
+        region_stats = calculate_regional_sales(ojo_engine, analysis_engine)
+        if region_stats:
+            region_df = pd.DataFrame(region_stats)
+            region_df.to_sql('region_snapshot', con=analysis_engine, if_exists='replace', index=False)
+            print("지역별 분석 스냅샷 적재 완료")
+    except Exception as e:
+        print(f"지역별 분석 중 에러 발생: {e}")
+
+    # 6. 통합 analysis 테이블 생성 (RFM 기반 자동화)
+    print("[통합] 최종 analysis 테이블 생성 중...")
+    try:
+        rfm_metrics_df = calculate_rfm_metrics(ojo_engine)
+
+        if not ltv_df.empty and not rfm_metrics_df.empty:
+            ltv_df.columns = ltv_df.columns.str.lower()
+
+            analysis_final_df = ltv_df.copy()
+            analysis_final_df = pd.merge(
+                analysis_final_df,
+                rfm_metrics_df,
+                on='member_id',
+                how='left'
+            )
+
+            analysis_final_df['rfm_score'] = analysis_final_df['rfm_score'].fillna(0)
+            analysis_final_df['type'] = analysis_final_df['type'].fillna('일반')
+            analysis_final_df['lifecycle_stage'] = analysis_final_df['lifecycle_stage'].fillna('ACTIVE')
+            analysis_final_df['created_at'] = datetime.now()
+
+            analysis_final_df[[
+                'member_id', 'ltv', 'rfm_score', 'type', 'lifecycle_stage', 'created_at'
+            ]].to_sql(
+                'analysis',
+                con=analysis_engine,
+                if_exists='replace',
+                index=True,
+                index_label='analysis_id'
+            )
+
+            print("analysis 통합 테이블 적재 성공! (RFM 모델 적용 완료)")
+        else:
+            print("기준이 되는 LTV나 RFM 데이터가 없어서 analysis 테이블을 만들지 못했습니다.")
+    except Exception as e:
+        print(f"통합 테이블 생성 중 에러: {e}")
+
+    # 7. 맞춤 추천
+    try:
+        print("[AI 추천] 고객별 맞춤 상품 추천 계산 시작...")
+        get_all_recommendations(ojo_engine, analysis_engine) 
+        print("[AI 추천] 추천 결과 스냅샷(recommend_snapshot) 적재 완료")
+    except Exception as e:
+        print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")
+
+    print("분석 결과 적재 완료 (ojo_analysis)")
 
     print("분석 결과 적재 완료 (ojo_analysis)")
 
@@ -78,85 +194,218 @@ def clean_df(df):
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
-    # 사용자가 API를 찌르면, 파이프라인 함수를 백그라운드 작업으로 던져놓습니다.
     background_tasks.add_task(run_analysis_pipeline)
-    
-    # 분석이 끝나길 기다리지 않고 바로 성공 응답을 줍니다! (타임아웃 방지)
+
     return {
-        "status": "started", 
+        "status": "started",
         "message": "다차원 분석 및 스냅샷 적재를 백그라운드에서 안전하게 시작합니다."
     }
+
 
 # 조회 API
 @app.get("/api/analysis/ltv/{memberId}")
 def get_member_ltv(memberId: str):
-    df = pd.read_sql(f"SELECT * FROM ltv_snapshot WHERE member_id = '{memberId}'", con=analysis_engine)
-    return {"status": "success", "data": df.to_dict(orient='records')[0] if not df.empty else {}}
+    df = pd.read_sql(
+        "SELECT * FROM ltv_snapshot WHERE member_id = :memberId",
+        con=analysis_engine,
+        params={"memberId": memberId}
+    )
+    if not df.empty:
+        return {"status": "success", "data": df.to_dict(orient='records')[0]}
+    else:
+        return {"status": "error", "message": f"{memberId} ltv 조회 실패", "data": {}}
+
 
 @app.get("/api/analysis/cohort")
 def get_cohort(segment: str = 'all'):
     query = f"SELECT * FROM cohort_snapshot WHERE segment_type = '{segment}'"
     df = pd.read_sql(query, con=analysis_engine)
-    
+
     if df.empty:
         return {"status": "error", "message": f"No data found for segment: {segment}"}
 
-    # JSON 에러 방지 처리 (기존 로직 유지)
     df = df.replace([np.inf, -np.inf], np.nan)
     result = df.to_dict(orient='records')
     clean_result = [{k: (None if pd.isna(v) else v) for k, v in record.items()} for record in result]
-    
+
     return {"status": "success", "segment": segment, "data": clean_result}
 
-# 추후 삭제될 수도 있음
-@app.get("/api/analysis/dashboard")
-def get_dashboard():
-    summary = pd.read_sql("SELECT * FROM rfm_kpi", con=ojo_engine)
-    return {"status": "success", "data": summary.to_dict(orient='records')}
+
+# 고객별 상담 타임라인
+# @app.get("/api/advice/timeline/{memberId}")
+# def get_member_timeline(memberId: int):
+#     try:
+#         df = get_member_advice_timeline(ojo_engine, memberId)
+
+#         return {
+#             "status": "success",
+#             "data": {
+#                 "memberId": memberId,
+#                 "timeline": df.to_dict(orient='records') if not df.empty else []
+#             },
+#             "message": None
+#         }
+#     except Exception as e:
+#         return {"status": "error", "data": None, "message": str(e)}
+
 
 # 요금제 통계
 @app.get("/api/analysis/churn")
 async def get_subscription():
-    result = calculate_subscription(ojo_engine)
-    
-    # 날짜 포맷팅 (Series가 비어있지 않을 때만 수행)
-    if not result['conversions'].empty:
-        result['conversions']['start_month'] = result['conversions']['start_month'].astype(str)
-    
-    return {
-        "status": "SUCCESS",
-        "data": {
-            "conversions": result['conversions'].to_dict(orient='records'),
-            "product_churn": result['product_churn'].to_dict(orient='records'),
-            "top_reasons": result['top_reasons'].to_dict(orient='records')
+    try:
+        conversions = pd.read_sql("SELECT * FROM conversion_snapshot", con=analysis_engine)
+        churn = pd.read_sql("SELECT * FROM churn_snapshot", con=analysis_engine)
+        reasons = pd.read_sql("SELECT * FROM reason_snapshot", con=analysis_engine)
+
+        return {
+            "status": "SUCCESS",
+            "data": {
+                "conversions": conversions.to_dict(orient='records'),
+                "product_churn": churn.to_dict(orient='records'),
+                "top_reasons": reasons.to_dict(orient='records')
+            }
         }
-    }
+    except Exception as e:
+        return {"status": "ERROR", "message": f"데이터가 아직 준비되지 않았습니다: {str(e)}"}
+
+
 # 지역 통계
 @app.get("/api/analysis/region")
 async def get_regional_sales():
     try:
         df = pd.read_sql("SELECT * FROM region_snapshot", con=analysis_engine)
-        return {"status": "SUCCESS", "data": clean_df(df)}
-    # 테이블 없다면
+        return {"status": "SUCCESS", "data": df.to_dict(orient='records')}
     except Exception:
-        return {"status": "SUCCESS", "data": []}
-    
-# 고객별 상담 타임라인
-@app.get("/api/advice/timeline/{memberId}")
-def get_member_timeline(memberId: int):
+        return {"status": "ERROR", "message": "데이터를 불러올 수 없습니다."}
+
+
+# 이탈률 예측
+@app.get("/api/predictions/churn")
+async def get_churn_prediction():
     try:
-        df = get_member_advice_timeline(ojo_engine, memberId)
-        
+        result = calculate_churn_prediction(ojo_engine)
+
+        detail_df = result["detail"]
+        summary_df = result["summary"]
+
+        total_count = int(len(detail_df)) if not detail_df.empty else 0
+
         return {
-            "status": "success", 
+            "status": "success",
             "data": {
-                "memberId": memberId,
-                "timeline": df.to_dict(orient='records') if not df.empty else []
+                "totalAnalyzed": total_count,
+                "riskDistribution": summary_df.to_dict(orient="records") if not summary_df.empty else [],
+                "detail": detail_df.to_dict(orient="records") if not detail_df.empty else []
             },
             "message": None
         }
+
     except Exception as e:
-        return {"status": "error", "data": None, "message": str(e)}
+        return {
+            "status": "error",
+            "data": None,
+            "message": str(e)
+        }
+
+
+# 맞춤 상품 추천
+@app.get("/api/analysis/recommend/{memberId}")
+def get_member_recommendation(memberId: int):
+    try:
+        data = get_recommendations(memberId, ojo_engine)
+        
+        if not data:
+            return {"status": "success", "data": [], "message": "추천 데이터가 없습니다."}
+
+        return {
+            "status": "success",
+            "data": data
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# 통합 고객 분석 데이터 조회 (LTV, RFM, 등급, 생애주기)
+@app.get("/api/analysis/customer/{memberId}")
+def get_customer_analysis(memberId: int):
+    try:
+        query = f"SELECT * FROM analysis WHERE member_id = {memberId} ORDER BY created_at DESC LIMIT 1"
+        df = pd.read_sql(query, con=analysis_engine)
+
+        if df.empty:
+            return {
+                "status": "success",
+                "data": {},
+                "message": "해당 고객의 분석 데이터가 아직 없습니다."
+            }
+
+        result = df.to_dict(orient='records')[0]
+        clean_result = {k: (None if pd.isna(v) else v) for k, v in result.items()}
+
+        return {
+            "status": "success",
+            "data": clean_result,
+            "message": "고객 통합 분석 데이터 조회 성공"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "data": None,
+            "message": f"분석 데이터 조회 중 오류 발생: {str(e)}"
+        }
+    
+    # 엑셀 보고서 다운로드 API
+@app.get("/api/analysis/report/export")
+def export_analysis_report():
+    print("[리포트] 엑셀 보고서 추출 시작...")
+    try:
+        # 1. DB에서 데이터 불러오기 (추천 테이블 제외, analysis만 조회)
+        an_df = pd.read_sql("SELECT * FROM analysis", con=analysis_engine)
+
+        if an_df.empty:
+            return {"status": "error", "message": "추출할 분석 데이터가 아직 없습니다. 파이프라인을 먼저 실행해주세요."}
+
+        # 2. 요약(Summary) 데이터 만들기 (추천 관련 지표 제거)
+        summary_data = {
+            "총 고객 수": [len(an_df)],
+            "VIP 고객 수": [len(an_df[an_df['type'] == 'VIP'])],
+            "이탈 위험(RISK) 고객 수": [len(an_df[an_df['type'] == 'RISK'])],
+            "평균 LTV (예측 수익)": [int(an_df['ltv'].mean()) if not an_df.empty else 0],
+            "보고서 생성일시": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+        }
+        summary_df = pd.DataFrame(summary_data)
+
+        # 3. 메모리 상에서 엑셀 파일 만들기 (디스크 저장 X)
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # 시트 1: 한눈에 보는 요약
+            summary_df.to_excel(writer, sheet_name='핵심_요약', index=False)
+            # 시트 2: 전체 고객 세그먼트 및 LTV
+            an_df.to_excel(writer, sheet_name='고객_분석_상세', index=False)
+
+        # 포인터를 처음으로 되돌리기 (중요!)
+        output.seek(0)
+
+        # 4. 파일명 한글 깨짐 방지 및 스트리밍 반환
+        today_str = datetime.now().strftime("%Y%m%d")
+        file_name = f"CRM_고객분석_보고서_{today_str}.xlsx"
+        encoded_file_name = quote(file_name)
+
+        headers = {
+            'Content-Disposition': f'attachment; filename="{encoded_file_name}"'
+        }
+
+        # 엑셀 파일 스트리밍 리스폰스 반환
+        return StreamingResponse(
+            output, 
+            headers=headers, 
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+
+    except Exception as e:
+        print(f"보고서 추출 중 에러: {e}")
+        return {"status": "error", "message": f"보고서 생성 중 오류가 발생했습니다: {str(e)}"}
+
 
 
 @app.get("/api/analysis/report/export")

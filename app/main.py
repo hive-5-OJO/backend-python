@@ -25,6 +25,7 @@ app = FastAPI(title="High-5 Data Science Server")
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:5173",
     "http://high5-ojo.s3-website.ap-northeast-2.amazonaws.com"
 ]
 
@@ -32,8 +33,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"], # GET, POST, OPTIONS 등 모든 메서드 허용
+    allow_headers=["*"], # 모든 헤더 허용
 )
 
 # [분석 실행 로직] Spring이 호출함
@@ -183,6 +184,13 @@ def run_analysis_pipeline():
 
     print("분석 결과 적재 완료 (ojo_analysis)")
 
+    print("분석 결과 적재 완료 (ojo_analysis)")
+
+def clean_df(df):
+    if df.empty: return []
+    # NaN은 None으로, Inf는 매우 큰 수나 None으로 교체
+    df = df.replace([np.inf, -np.inf], np.nan)
+    return df.where(pd.notnull(df), None).to_dict(orient='records')
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
@@ -398,6 +406,53 @@ def export_analysis_report():
         print(f"보고서 추출 중 에러: {e}")
         return {"status": "error", "message": f"보고서 생성 중 오류가 발생했습니다: {str(e)}"}
 
+
+
+@app.get("/api/analysis/report/export")
+def export_analysis_report():
+    try:
+        #메모리 버퍼 생성 (가상의 엑셀 파일)
+        output = io.BytesIO()
+        
+        #Pandas ExcelWriter를 사용해 여러 시트(Tab) 작성
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            
+            df_cohort = pd.read_sql("SELECT * FROM cohort_snapshot", con=analysis_engine)
+            if not df_cohort.empty:
+                df_cohort.to_excel(writer, sheet_name="코호트_분석", index=False)
+
+            df_region = pd.read_sql("SELECT * FROM region_snapshot", con=analysis_engine)
+            if not df_region.empty:
+                df_region.to_excel(writer, sheet_name="지역별_매출", index=False)
+
+            df_ltv = pd.read_sql("SELECT * FROM ltv_snapshot", con=analysis_engine)
+            if not df_ltv.empty:
+                df_ltv.to_excel(writer, sheet_name="LTV_분석", index=False)
+
+            df_churn = pd.read_sql("SELECT * FROM churn_snapshot", con=analysis_engine)
+            if not df_churn.empty:
+                df_churn.to_excel(writer, sheet_name="요금제_이탈률", index=False)
+
+        output.seek(0)
+        
+        #다운로드 파일명 생성 (예: analysis_report_20260311.xlsx)
+        today_str = datetime.now().strftime("%Y%m%d")
+        filename = f"analysis_report_{today_str}.xlsx"
+        
+        #브라우저가 파일 다운로드로 인식하도록 헤더 설정
+        headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"'
+        }
+        
+        #스트리밍 방식으로 엑셀 파일 전송
+        return StreamingResponse(
+            output, 
+            headers=headers, 
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        
+    except Exception as e:
+        return {"status": "error", "message": f"보고서 생성 중 오류 발생: {str(e)}"}
 
 if __name__ == "__main__":
     import uvicorn

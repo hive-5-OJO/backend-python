@@ -11,6 +11,7 @@ from .analyzer.regional_sales_analyzer import calculate_regional_sales
 from .analyzer.churn_prediction_analyzer import calculate_churn_prediction
 from .model.recommendation import get_recommendations, get_all_recommendations
 
+
 app = FastAPI(title="High-5 Data Science Server")
 
 origins = [
@@ -248,6 +249,7 @@ def get_member_recommendation(memberId: int):
         return {
             "status": "success",
             "data": data
+
         }
     except Exception as e:
         return {"status": "error", "message": str(e)} 

@@ -32,7 +32,7 @@ DATA_LIMIT_MAP = {
     '5G 키즈 45': 9000, '5G 키즈 39': 3300, 'LTE청소년19': 350
 }
 
-def get_recommendations(ojo_engine, analysis_engine):
+def get_all_recommendations(ojo_engine, analysis_engine):
     # 속도 향상을 위해 뷰 사용 가능
     query = """
     SELECT 

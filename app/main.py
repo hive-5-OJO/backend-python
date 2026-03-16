@@ -9,7 +9,7 @@ from .analyzer.advice_analyzer import get_member_advice_timeline
 from .analyzer.subscription_analyzer import calculate_subscription
 from .analyzer.regional_sales_analyzer import calculate_regional_sales
 from .analyzer.churn_prediction_analyzer import calculate_churn_prediction
-from .model.recommendation import get_recommendations
+from .model.recommendation import get_recommendations, get_all_recommendations
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -125,7 +125,7 @@ def run_analysis_pipeline():
     # 맞춤 추천
     try:
         print("[AI 추천] 고객별 맞춤 상품 추천 계산 시작...")
-        get_recommendations(ojo_engine, analysis_engine) 
+        get_all_recommendations(ojo_engine, analysis_engine) 
         print("[AI 추천] 추천 결과 스냅샷(recommend_snapshot) 적재 완료")
     except Exception as e:
         print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")

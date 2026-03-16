@@ -1,7 +1,13 @@
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse 
 import pandas as pd
 import numpy as np
+import io
+from datetime import datetime
+from urllib.parse import quote
+
+# 데이터베이스 및 분석 모듈
 from .database import ojo_engine, analysis_engine
 from .analyzer.ltv_analyzer import calculate_ltv
 from .analyzer.cohort_analyzer import calculate_segmented_cohort
@@ -322,3 +328,55 @@ def get_customer_analysis(memberId: int):
             "data": None,
             "message": f"분석 데이터 조회 중 오류 발생: {str(e)}"
         }
+    
+    # 엑셀 보고서 다운로드 API
+@app.get("/api/analysis/report/export")
+def export_analysis_report():
+    print("[리포트] 엑셀 보고서 추출 시작...")
+    try:
+        # 1. DB에서 데이터 불러오기 (추천 테이블 제외, analysis만 조회)
+        an_df = pd.read_sql("SELECT * FROM analysis", con=analysis_engine)
+
+        if an_df.empty:
+            return {"status": "error", "message": "추출할 분석 데이터가 아직 없습니다. 파이프라인을 먼저 실행해주세요."}
+
+        # 2. 요약(Summary) 데이터 만들기 (추천 관련 지표 제거)
+        summary_data = {
+            "총 고객 수": [len(an_df)],
+            "VIP 고객 수": [len(an_df[an_df['type'] == 'VIP'])],
+            "이탈 위험(RISK) 고객 수": [len(an_df[an_df['type'] == 'RISK'])],
+            "평균 LTV (예측 수익)": [int(an_df['ltv'].mean()) if not an_df.empty else 0],
+            "보고서 생성일시": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+        }
+        summary_df = pd.DataFrame(summary_data)
+
+        # 3. 메모리 상에서 엑셀 파일 만들기 (디스크 저장 X)
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # 시트 1: 한눈에 보는 요약
+            summary_df.to_excel(writer, sheet_name='핵심_요약', index=False)
+            # 시트 2: 전체 고객 세그먼트 및 LTV
+            an_df.to_excel(writer, sheet_name='고객_분석_상세', index=False)
+
+        # 포인터를 처음으로 되돌리기 (중요!)
+        output.seek(0)
+
+        # 4. 파일명 한글 깨짐 방지 및 스트리밍 반환
+        today_str = datetime.now().strftime("%Y%m%d")
+        file_name = f"CRM_고객분석_보고서_{today_str}.xlsx"
+        encoded_file_name = quote(file_name)
+
+        headers = {
+            'Content-Disposition': f'attachment; filename="{encoded_file_name}"'
+        }
+
+        # 엑셀 파일 스트리밍 리스폰스 반환
+        return StreamingResponse(
+            output, 
+            headers=headers, 
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+
+    except Exception as e:
+        print(f"보고서 추출 중 에러: {e}")
+        return {"status": "error", "message": f"보고서 생성 중 오류가 발생했습니다: {str(e)}"}

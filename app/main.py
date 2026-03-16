@@ -249,7 +249,6 @@ def get_member_recommendation(memberId: int):
         return {
             "status": "success",
             "data": data
-
         }
     except Exception as e:
         return {"status": "error", "message": str(e)} 

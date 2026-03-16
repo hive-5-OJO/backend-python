@@ -10,7 +10,7 @@ from .analyzer.subscription_analyzer import calculate_subscription
 from .analyzer.regional_sales_analyzer import calculate_regional_sales
 from .analyzer.churn_prediction_analyzer import calculate_churn_prediction
 from .model.recommendation import get_recommendations, get_all_recommendations
-
+from .analyzer.rfm_analyzer import calculate_rfm_metrics
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -122,6 +122,38 @@ def run_analysis_pipeline():
         print(f"지역별 분석 중 에러 발생: {e}")
 
     print("분석 결과 적재 완료 (ojo_analysis)")
+
+# 5. 통합 analysis 테이블 생성 (RFM 기반 자동화)
+    print("[통합] 최종 analysis 테이블 생성 중...")
+    try:
+        # DB에서 RFM 기반 세그먼트 계산해오기
+        rfm_metrics_df = calculate_rfm_metrics(ojo_engine)
+        
+        if not ltv_df.empty and not rfm_metrics_df.empty:
+            from datetime import datetime
+            
+            ltv_df.columns = ltv_df.columns.str.lower()
+            
+            analysis_final_df = ltv_df.copy()
+            
+            analysis_final_df = pd.merge(analysis_final_df, rfm_metrics_df, on='member_id', how='left')
+            
+            # 빈칸 방어
+            analysis_final_df['rfm_score'] = analysis_final_df['rfm_score'].fillna(0)
+            analysis_final_df['type'] = analysis_final_df['type'].fillna('일반')
+            analysis_final_df['lifecycle_stage'] = analysis_final_df['lifecycle_stage'].fillna('ACTIVE')
+            analysis_final_df['created_at'] = datetime.now()
+
+            # 테이블 적재
+            analysis_final_df[[
+                'member_id', 'ltv', 'rfm_score', 'type', 'lifecycle_stage', 'created_at'
+            ]].to_sql('analysis', con=analysis_engine, if_exists='replace', index=True, index_label='analysis_id')
+            
+            print("analysis 통합 테이블 적재 성공! (RFM 모델 적용 완료)")
+        else:
+            print("기준이 되는 LTV나 RFM 데이터가 없어서 analysis 테이블을 만들지 못했습니다.")
+    except Exception as e:
+        print(f"통합 테이블 생성 중 에러: {e}")
 
     # 맞춤 추천
     try:
@@ -256,3 +288,36 @@ def get_member_recommendation(memberId: int):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+    # 통합 고객 분석 데이터 조회 (LTV, RFM, 등급, 생애주기)
+@app.get("/api/analysis/customer/{memberId}")
+def get_customer_analysis(memberId: int):
+    try:
+        # analysis 테이블에서 해당 고객의 가장 최근 데이터 1건 조회
+        query = f"SELECT * FROM analysis WHERE member_id = {memberId} ORDER BY created_at DESC LIMIT 1"
+        df = pd.read_sql(query, con=analysis_engine)
+        
+        if df.empty:
+            return {
+                "status": "success", 
+                "data": {}, 
+                "message": "해당 고객의 분석 데이터가 아직 없습니다."
+            }
+            
+        result = df.to_dict(orient='records')[0]
+        
+        import numpy as np
+        clean_result = {k: (None if pd.isna(v) else v) for k, v in result.items()}
+        
+        return {
+            "status": "success",
+            "data": clean_result,
+            "message": "고객 통합 분석 데이터 조회 성공"
+        }
+    except Exception as e:
+        return {
+            "status": "error", 
+            "data": None,
+            "message": f"분석 데이터 조회 중 오류 발생: {str(e)}"
+        }

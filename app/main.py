@@ -203,21 +203,21 @@ def get_cohort(segment: str = 'all'):
     return {"status": "success", "segment": segment, "data": clean_result}
 
 # 고객별 상담 타임라인
-@app.get("/api/advice/timeline/{memberId}")
-def get_member_timeline(memberId: int):
-    try:
-        df = get_member_advice_timeline(ojo_engine, memberId)
+# @app.get("/api/advice/timeline/{memberId}")
+# def get_member_timeline(memberId: int):
+#     try:
+#         df = get_member_advice_timeline(ojo_engine, memberId)
 
-        return {
-            "status": "success",
-            "data": {
-                "memberId": memberId,
-                "timeline": df.to_dict(orient='records') if not df.empty else []
-            },
-            "message": None
-        }
-    except Exception as e:
-        return {"status": "error", "data": None, "message": str(e)}
+#         return {
+#             "status": "success",
+#             "data": {
+#                 "memberId": memberId,
+#                 "timeline": df.to_dict(orient='records') if not df.empty else []
+#             },
+#             "message": None
+#         }
+#     except Exception as e:
+#         return {"status": "error", "data": None, "message": str(e)}
 
 # 요금제 통계
 @app.get("/api/analysis/churn")

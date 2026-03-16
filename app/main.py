@@ -18,7 +18,7 @@ from .analyzer.subscription_analyzer import calculate_subscription
 from .analyzer.regional_sales_analyzer import calculate_regional_sales
 from .analyzer.churn_prediction_analyzer import calculate_churn_prediction
 from .analyzer.rfm_analyzer import calculate_rfm_metrics
-from .model.recommendation import recommendation_engine
+from .model.recommendation import get_recommendations, get_all_recommendations
 
 app = FastAPI(title="High-5 Data Science Server")
 
@@ -35,7 +35,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # [분석 실행 로직] Spring이 호출함
 def run_analysis_pipeline():
@@ -177,7 +176,7 @@ def run_analysis_pipeline():
     # 7. 맞춤 추천
     try:
         print("[AI 추천] 고객별 맞춤 상품 추천 계산 시작...")
-        recommendation_engine(ojo_engine, analysis_engine)
+        get_all_recommendations(ojo_engine, analysis_engine) 
         print("[AI 추천] 추천 결과 스냅샷(recommend_snapshot) 적재 완료")
     except Exception as e:
         print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")
@@ -305,15 +304,14 @@ async def get_churn_prediction():
 @app.get("/api/analysis/recommend/{memberId}")
 def get_member_recommendation(memberId: int):
     try:
-        query = f"SELECT * FROM recommend_snapshot WHERE member_id = {memberId} ORDER BY rank ASC"
-        df = pd.read_sql(query, con=analysis_engine)
-
-        if df.empty:
+        data = get_recommendations(memberId, ojo_engine)
+        
+        if not data:
             return {"status": "success", "data": [], "message": "추천 데이터가 없습니다."}
 
         return {
             "status": "success",
-            "data": df.to_dict(orient='records')
+            "data": data
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}

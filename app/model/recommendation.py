@@ -68,11 +68,14 @@ def get_all_recommendations(ojo_engine, analysis_engine):
 
     product_centroids = []
     for p_id in products['product_id']:
-        centroid = df_scaled[df['current_product_id'] == p_id].mean(axis=0)
-        product_centroids.append(centroid if not np.isnan(centroid).any() else np.zeros(len(features)))
-
-    product_centroids = np.array(product_centroids)
-    user_sim_matrix = cosine_similarity(df_scaled, product_centroids)
+        mask = df['current_product_id'] == p_id
+        if mask.any(): # 해당 상품을 쓰는 유저가 있을 때만 계산
+            centroid = df_scaled[mask].mean(axis=0)
+        else: # 아무도 안 쓰면 0으로 채움
+            centroid = np.zeros(len(features))
+        product_centroids.append(centroid)
+        product_centroids = np.array(product_centroids)
+        user_sim_matrix = cosine_similarity(df_scaled, product_centroids)
 
     num_users = len(df)
     num_products = len(products)

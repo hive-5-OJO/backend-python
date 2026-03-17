@@ -210,16 +210,16 @@ def clean_df(df):
     return df.where(pd.notnull(df), None).to_dict(orient='records')
 
 @app.get("/api/analysis/make")
-# async def make_analysis(background_tasks: BackgroundTasks):
-#     background_tasks.add_task(run_analysis_pipeline)
+async def make_analysis(background_tasks: BackgroundTasks):
+    background_tasks.add_task(run_analysis_pipeline)
 
-#     return {
-#         "status": "started",
-#         "message": "다차원 분석 및 스냅샷 적재를 백그라운드에서 안전하게 시작합니다."
-#     }
-async def make_analysis(): 
-    run_analysis_pipeline() 
-    return {"status": "success", "message": "분석 완료"}
+    return {
+        "status": "started",
+        "message": "다차원 분석 및 스냅샷 적재를 백그라운드에서 안전하게 시작합니다."
+    }
+# async def make_analysis(): 
+#     run_analysis_pipeline() 
+#     return {"status": "success", "message": "분석 완료"}
 
 
 # 조회 API

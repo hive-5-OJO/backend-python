@@ -1,7 +1,12 @@
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse 
 import pandas as pd
 import numpy as np
+import io
+from urllib.parse import quote
+
+# 데이터베이스 및 분석 모듈
 import traceback
 from datetime import datetime
 
@@ -20,6 +25,7 @@ app = FastAPI(title="High-5 Data Science Server")
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:5173",
     "http://high5-ojo.s3-website.ap-northeast-2.amazonaws.com"
 ]
 
@@ -27,8 +33,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"], # GET, POST, OPTIONS 등 모든 메서드 허용
+    allow_headers=["*"], # 모든 헤더 허용
 )
 
 # [분석 실행 로직] Spring이 호출함
@@ -178,6 +184,13 @@ def run_analysis_pipeline():
 
     print("분석 결과 적재 완료 (ojo_analysis)")
 
+    print("분석 결과 적재 완료 (ojo_analysis)")
+
+def clean_df(df):
+    if df.empty: return []
+    # NaN은 None으로, Inf는 매우 큰 수나 None으로 교체
+    df = df.replace([np.inf, -np.inf], np.nan)
+    return df.where(pd.notnull(df), None).to_dict(orient='records')
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
@@ -219,21 +232,21 @@ def get_cohort(segment: str = 'all'):
 
 
 # 고객별 상담 타임라인
-@app.get("/api/advice/timeline/{memberId}")
-def get_member_timeline(memberId: int):
-    try:
-        df = get_member_advice_timeline(ojo_engine, memberId)
+# @app.get("/api/advice/timeline/{memberId}")
+# def get_member_timeline(memberId: int):
+#     try:
+#         df = get_member_advice_timeline(ojo_engine, memberId)
 
-        return {
-            "status": "success",
-            "data": {
-                "memberId": memberId,
-                "timeline": df.to_dict(orient='records') if not df.empty else []
-            },
-            "message": None
-        }
-    except Exception as e:
-        return {"status": "error", "data": None, "message": str(e)}
+#         return {
+#             "status": "success",
+#             "data": {
+#                 "memberId": memberId,
+#                 "timeline": df.to_dict(orient='records') if not df.empty else []
+#             },
+#             "message": None
+#         }
+#     except Exception as e:
+#         return {"status": "error", "data": None, "message": str(e)}
 
 
 # 요금제 통계
@@ -340,7 +353,106 @@ def get_customer_analysis(memberId: int):
             "data": None,
             "message": f"분석 데이터 조회 중 오류 발생: {str(e)}"
         }
+    
+    # 엑셀 보고서 다운로드 API
+@app.get("/api/analysis/report/export")
+def export_analysis_report():
+    print("[리포트] 엑셀 보고서 추출 시작...")
+    try:
+        # 1. DB에서 데이터 불러오기 (추천 테이블 제외, analysis만 조회)
+        an_df = pd.read_sql("SELECT * FROM analysis", con=analysis_engine)
 
+        if an_df.empty:
+            return {"status": "error", "message": "추출할 분석 데이터가 아직 없습니다. 파이프라인을 먼저 실행해주세요."}
+
+        # 2. 요약(Summary) 데이터 만들기 (추천 관련 지표 제거)
+        summary_data = {
+            "총 고객 수": [len(an_df)],
+            "VIP 고객 수": [len(an_df[an_df['type'] == 'VIP'])],
+            "이탈 위험(RISK) 고객 수": [len(an_df[an_df['type'] == 'RISK'])],
+            "평균 LTV (예측 수익)": [int(an_df['ltv'].mean()) if not an_df.empty else 0],
+            "보고서 생성일시": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+        }
+        summary_df = pd.DataFrame(summary_data)
+
+        # 3. 메모리 상에서 엑셀 파일 만들기 (디스크 저장 X)
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # 시트 1: 한눈에 보는 요약
+            summary_df.to_excel(writer, sheet_name='핵심_요약', index=False)
+            # 시트 2: 전체 고객 세그먼트 및 LTV
+            an_df.to_excel(writer, sheet_name='고객_분석_상세', index=False)
+
+        # 포인터를 처음으로 되돌리기 (중요!)
+        output.seek(0)
+
+        # 4. 파일명 한글 깨짐 방지 및 스트리밍 반환
+        today_str = datetime.now().strftime("%Y%m%d")
+        file_name = f"CRM_고객분석_보고서_{today_str}.xlsx"
+        encoded_file_name = quote(file_name)
+
+        headers = {
+            'Content-Disposition': f'attachment; filename="{encoded_file_name}"'
+        }
+
+        # 엑셀 파일 스트리밍 리스폰스 반환
+        return StreamingResponse(
+            output, 
+            headers=headers, 
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+
+    except Exception as e:
+        print(f"보고서 추출 중 에러: {e}")
+        return {"status": "error", "message": f"보고서 생성 중 오류가 발생했습니다: {str(e)}"}
+
+
+
+@app.get("/api/analysis/report/export")
+def export_analysis_report():
+    try:
+        #메모리 버퍼 생성 (가상의 엑셀 파일)
+        output = io.BytesIO()
+        
+        #Pandas ExcelWriter를 사용해 여러 시트(Tab) 작성
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            
+            df_cohort = pd.read_sql("SELECT * FROM cohort_snapshot", con=analysis_engine)
+            if not df_cohort.empty:
+                df_cohort.to_excel(writer, sheet_name="코호트_분석", index=False)
+
+            df_region = pd.read_sql("SELECT * FROM region_snapshot", con=analysis_engine)
+            if not df_region.empty:
+                df_region.to_excel(writer, sheet_name="지역별_매출", index=False)
+
+            df_ltv = pd.read_sql("SELECT * FROM ltv_snapshot", con=analysis_engine)
+            if not df_ltv.empty:
+                df_ltv.to_excel(writer, sheet_name="LTV_분석", index=False)
+
+            df_churn = pd.read_sql("SELECT * FROM churn_snapshot", con=analysis_engine)
+            if not df_churn.empty:
+                df_churn.to_excel(writer, sheet_name="요금제_이탈률", index=False)
+
+        output.seek(0)
+        
+        #다운로드 파일명 생성 (예: analysis_report_20260311.xlsx)
+        today_str = datetime.now().strftime("%Y%m%d")
+        filename = f"analysis_report_{today_str}.xlsx"
+        
+        #브라우저가 파일 다운로드로 인식하도록 헤더 설정
+        headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"'
+        }
+        
+        #스트리밍 방식으로 엑셀 파일 전송
+        return StreamingResponse(
+            output, 
+            headers=headers, 
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        
+    except Exception as e:
+        return {"status": "error", "message": f"보고서 생성 중 오류 발생: {str(e)}"}
 
 if __name__ == "__main__":
     import uvicorn

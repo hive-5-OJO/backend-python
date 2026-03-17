@@ -8,6 +8,7 @@ from urllib.parse import quote
 
 # 데이터베이스 및 분석 모듈
 import traceback
+import time
 from datetime import datetime
 
 from .database import ojo_engine, analysis_engine
@@ -39,7 +40,8 @@ app.add_middleware(
 
 # [분석 실행 로직] Spring이 호출함
 def run_analysis_pipeline():
-    print("다차원 분석 파이프라인 가동...")
+    start_time = time.time() 
+    print(f"다차원 분석 파이프라인 가동: {datetime.now()}")
 
     # 1. LTV 계산 및 저장
     print("[분석] LTV(고객 생애 가치) 계산 중...")
@@ -126,17 +128,6 @@ def run_analysis_pipeline():
         print(f"[CHURN-ML] 이탈 예측 분석 중 에러 발생: {e}", flush=True)
         traceback.print_exc()
 
-    # 5. 지역별 분석 결과 스냅샷 저장
-    print("지역별 분석 시작...")
-    try:
-        region_stats = calculate_regional_sales(ojo_engine, analysis_engine)
-        if region_stats:
-            region_df = pd.DataFrame(region_stats)
-            region_df.to_sql('region_snapshot', con=analysis_engine, if_exists='replace', index=False)
-            print("지역별 분석 스냅샷 적재 완료")
-    except Exception as e:
-        print(f"지역별 분석 중 에러 발생: {e}")
-
     # 6. 통합 analysis 테이블 생성 (RFM 기반 자동화)
     print("[통합] 최종 analysis 테이블 생성 중...")
     try:
@@ -169,10 +160,33 @@ def run_analysis_pipeline():
             )
 
             print("analysis 통합 테이블 적재 성공! (RFM 모델 적용 완료)")
+
+            # 마이그레이션 적용 필요
+            analysis_final_df[[
+                'member_id', 'ltv', 'rfm_score', 'type', 'lifecycle_stage', 'created_at'
+            ]].to_sql(
+                'analysis',
+                con=ojo_engine,
+                if_exists='replace',
+                index=False
+            )
+            print("analysis 통합 테이블 적재 성공! (RFM 모델 적용 완료)")
         else:
             print("기준이 되는 LTV나 RFM 데이터가 없어서 analysis 테이블을 만들지 못했습니다.")
     except Exception as e:
         print(f"통합 테이블 생성 중 에러: {e}")
+        
+    # 5. 지역별 분석 결과 스냅샷 저장
+    print("지역별 분석 시작...")
+    try:
+        region_stats = calculate_regional_sales(ojo_engine, analysis_engine)
+        if region_stats:
+            region_df = pd.DataFrame(region_stats)
+            region_df.to_sql('region_snapshot', con=analysis_engine, if_exists='replace', index=False)
+            print("지역별 분석 스냅샷 적재 완료")
+    except Exception as e:
+        print(f"지역별 분석 중 에러 발생: {e}")
+
 
     # 7. 맞춤 추천
     try:
@@ -182,7 +196,10 @@ def run_analysis_pipeline():
     except Exception as e:
         print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")
 
+    end_time = time.time()
+    duration = end_time - start_time
     print("분석 결과 적재 완료 (ojo_analysis)")
+    print(f"TOTAL EXECUTION TIME: {duration:.2f} seconds")
 
     print("분석 결과 적재 완료 (ojo_analysis)")
 
@@ -193,13 +210,16 @@ def clean_df(df):
     return df.where(pd.notnull(df), None).to_dict(orient='records')
 
 @app.get("/api/analysis/make")
-async def make_analysis(background_tasks: BackgroundTasks):
-    background_tasks.add_task(run_analysis_pipeline)
+# async def make_analysis(background_tasks: BackgroundTasks):
+#     background_tasks.add_task(run_analysis_pipeline)
 
-    return {
-        "status": "started",
-        "message": "다차원 분석 및 스냅샷 적재를 백그라운드에서 안전하게 시작합니다."
-    }
+#     return {
+#         "status": "started",
+#         "message": "다차원 분석 및 스냅샷 적재를 백그라운드에서 안전하게 시작합니다."
+#     }
+async def make_analysis(): 
+    run_analysis_pipeline() 
+    return {"status": "success", "message": "분석 완료"}
 
 
 # 조회 API
@@ -229,25 +249,6 @@ def get_cohort(segment: str = 'all'):
     clean_result = [{k: (None if pd.isna(v) else v) for k, v in record.items()} for record in result]
 
     return {"status": "success", "segment": segment, "data": clean_result}
-
-
-# 고객별 상담 타임라인
-# @app.get("/api/advice/timeline/{memberId}")
-# def get_member_timeline(memberId: int):
-#     try:
-#         df = get_member_advice_timeline(ojo_engine, memberId)
-
-#         return {
-#             "status": "success",
-#             "data": {
-#                 "memberId": memberId,
-#                 "timeline": df.to_dict(orient='records') if not df.empty else []
-#             },
-#             "message": None
-#         }
-#     except Exception as e:
-#         return {"status": "error", "data": None, "message": str(e)}
-
 
 # 요금제 통계
 @app.get("/api/analysis/churn")

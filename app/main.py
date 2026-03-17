@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import io
 from urllib.parse import quote
+from sqlalchemy import text
 
 # 데이터베이스 및 분석 모듈
 import traceback
@@ -225,8 +226,9 @@ async def make_analysis():
 # 조회 API
 @app.get("/api/analysis/ltv/{memberId}")
 def get_member_ltv(memberId: str):
+    query = text("SELECT * FROM ltv_snapshot WHERE member_id = :memberId")
     df = pd.read_sql(
-        "SELECT * FROM ltv_snapshot WHERE member_id = :memberId",
+        query, 
         con=analysis_engine,
         params={"memberId": memberId}
     )

@@ -89,7 +89,7 @@ def get_all_recommendations(ojo_engine, analysis_engine):
         else: # 아무도 안 쓰면 0으로 채움
             centroid = np.zeros(len(features))
         product_centroids.append(centroid)
-
+        
     product_centroids = np.array(product_centroids)
 
     num_users = len(df)

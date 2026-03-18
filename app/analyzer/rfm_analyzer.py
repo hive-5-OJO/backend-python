@@ -5,7 +5,9 @@ from datetime import datetime
 
 def calculate_rfm_metrics(ojo_engine):
     # DB에서 rfm 테이블 가져오기
-    query = "SELECT member_id, recency, frequency, monetary FROM rfm"
+    query = """SELECT r.member_id, r.recency, r.frequency, r.monetary, m.status FROM rfm r
+                JOIN member m ON r.member_id = m.member_id
+            """
     df = pd.read_sql(text(query), con=ojo_engine)
 
     if df.empty:
@@ -29,12 +31,13 @@ def calculate_rfm_metrics(ojo_engine):
 
     # type (고객 세그먼트) 계산
     type_conditions = [
+        (df['status'] == 'TERMINATED'),                                     # LOST (이탈 - 휴먼 고객으로 변경)                                 
+        (df['status'] == 'DORMANT'),                                        # RISK (이탈 위험 - 예전엔 단골이었음)
         (df['R_score'] >= 4) & (df['F_score'] >= 4) & (df['M_score'] >= 4), # VIP
         (df['R_score'] >= 3) & (df['F_score'] >= 3) & (df['M_score'] >= 3), # LOYAL (잠재 VIP)
-        (df['R_score'] <= 2) & (df['F_score'] >= 3),                        # RISK (이탈 위험 - 예전엔 단골이었음)
-        (df['R_score'] <= 2) & (df['F_score'] <= 2)                         # LOST (이탈 - 오랫동안 안 옴)
+        (df['R_score'] <= 2) & (df['F_score'] >= 2)
     ]
-    type_choices = ['VIP', 'LOYAL', 'RISK', 'LOST']
+    type_choices = ['LOST', 'RISK', 'VIP', 'LOYAL', 'RISK']
     df['type'] = np.select(type_conditions, type_choices, default='COMMON')
 
     # lifecycle_stage (생애주기) 계산
@@ -49,6 +52,11 @@ def calculate_rfm_metrics(ojo_engine):
     lc_choices = ['CHURNED', 'AT_RISK', 'STAGNANT', 'NEW']
     df['lifecycle_stage'] = np.select(lc_conditions, lc_choices, default='GROWING') # GROWING (성장/활성 유지)
 
+    df['r_score'] = df['R_score']
+    df['f_score'] = df['F_score']
+    df['m_score'] = df['M_score']
     # 최종 필요한 컬럼만 정리해서 반환
-    result_df = df[['member_id', 'rfm_score', 'type', 'lifecycle_stage']]
+    result_df = df[['member_id', 'rfm_score', 'type', 'lifecycle_stage',
+                    'r_score', 'f_score', 'm_score']]
+    
     return result_df

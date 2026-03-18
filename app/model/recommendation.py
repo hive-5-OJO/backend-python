@@ -3,6 +3,7 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
 from datetime import datetime
+import time
 
 # 1GB = 1000
 DATA_LIMIT_MAP = {
@@ -33,6 +34,17 @@ DATA_LIMIT_MAP = {
 }
 
 def get_all_recommendations(ojo_engine, analysis_engine):
+    print("[AI 추천] 전체 추천 시작")
+    start_query = time.time()
+
+    products = pd.read_sql("SELECT * FROM product", con=ojo_engine)
+    p_names = products['product_name'].values
+    p_prices = products['price'].values
+    p_categories = products['product_category'].values
+    p_limits = np.array([DATA_LIMIT_MAP.get(name, 0) for name in p_names])
+
+    print(f"[디버그] product 조회 완료! 소요시간: {time.time() - start_query:.2f}초")
+
     # 속도 향상을 위해 뷰 사용 가능
     query = """
     SELECT 
@@ -40,7 +52,7 @@ def get_all_recommendations(ojo_engine, analysis_engine):
         fu.total_usage_amount, fu.usage_active_days_30d, fu.usage_peak_hour,
         fm.avg_monthly_bill, fm.total_revenue, fm.payment_delay_count,
         fc.top_consult_category, fc.total_consult_count,
-        -- an.rfm_score, an.type as segment, an.ltv,
+        an.rfm_score, an.type as segment, an.ltv,
         -- cp.churn_score, cp.risk_grade, 
         sp.product_id as current_product_id,
         p.product_name as current_product_name, p.price as current_base_price
@@ -48,13 +60,16 @@ def get_all_recommendations(ojo_engine, analysis_engine):
     JOIN feature_usage fu ON m.member_id = fu.member_id
     JOIN feature_monetary fm ON m.member_id = fm.member_id
     JOIN feature_consultation fc ON m.member_id = fc.member_id
-    -- JOIN analysis an ON m.member_id = an.member_id
+    JOIN analysis an ON m.member_id = an.member_id
     -- LEFT JOIN churn_prediction cp ON m.member_id = cp.member_id
     LEFT JOIN subscription_period sp ON m.member_id = sp.member_id AND sp.status = 'ACTIVE'
     LEFT JOIN product p ON sp.product_id = p.product_id
     """
     df = pd.read_sql(query, con=ojo_engine)
-    products = pd.read_sql("SELECT * FROM product", con=ojo_engine)
+    print(f"[디버그] 쿼리 실행 완료! 소요시간: {time.time() - start_query:.2f}초, 데이터 크기: {len(df)} 행")
+
+    df = df.reset_index(drop=True)
+    df = df.fillna(0)
 
     current_year = datetime.now().year
     df['age'] = current_year - pd.to_datetime(df['birth_date']).dt.year 
@@ -74,127 +89,144 @@ def get_all_recommendations(ojo_engine, analysis_engine):
         else: # 아무도 안 쓰면 0으로 채움
             centroid = np.zeros(len(features))
         product_centroids.append(centroid)
+
     product_centroids = np.array(product_centroids)
-    user_sim_matrix = cosine_similarity(df_scaled, product_centroids)
 
     num_users = len(df)
     num_products = len(products)
-
-    # 유사도 : 비즈니스 = 3:7
-    total_scores = user_sim_matrix * 30 
-    total_reasons = np.full((num_users, num_products), "", dtype=object)
-
-    p_names = products['product_name'].values
-    p_prices = products['price'].values
-    p_categories = products['product_category'].values
-    p_limits = np.array([DATA_LIMIT_MAP.get(name, 0) for name in p_names])
     
-    # 현재 사용자가 사용하고 있거나 사용하고 있는 거보다 데이터 한도 낮은 상품 제외
-    is_current = df['current_product_name'].values[:, None] == p_names[None, :]
-    is_lower = df['current_limit'].values[:, None] > p_limits[None, :]
-    total_scores[is_current | is_lower] = -999
+    # 서버 안터지게 하기 위함 (메모리 절약)
+    chunk_size = 2000 
+    print(f"[AI 추천] 총 {num_users}명 분석 시작 (청크 사이즈: {chunk_size})")
 
-    # 최대 데이터 사용량의 90% 이상 + 가격 2만원 이내 상승 
-    usage_stress = (df['total_usage_amount'] / df['current_limit'].replace(0, np.inf)).values > 0.9
-    price_diff_mask = (p_prices[None, :] > df['avg_monthly_bill'].values[:, None]) & \
-                      (p_prices[None, :] <= df['avg_monthly_bill'].values[:, None] + 20000)
-    up_sell_mask = usage_stress[:, None] & price_diff_mask
-    total_scores += np.where(up_sell_mask, 25, 0)
-    total_reasons[up_sell_mask] += "데이터 사용 패턴에 맞춰 한 단계 높은 요금제를 추천합니다. "
+    for i in range(0, num_users, chunk_size):
+        end_idx = min(i + chunk_size, num_users)
+        df_chunk = df.iloc[i:end_idx]
+        df_scaled_chunk = df_scaled[i:end_idx]
+        current_chunk_size = len(df_chunk)
 
-    # 3인 이상 => db에 lg u+ 결합 상품 추가(U+투게더 결합, 참 쉬운 가족 결합 ,신혼플러스 결합, 참 쉬운 케이블 가족 결합)
-    is_family_prod = np.array([any(k in name for k in ['가족', '결합', '투게더']) for name in p_names])
-    family_user_mask = (df['household_type'] >= 3).values
-    family_mask = family_user_mask[:, None] & is_family_prod[None, :]
-    total_scores += np.where(family_mask, 20, 0)
-    total_reasons[family_mask] += "다인 가구 맞춤 결합 상품으로 통신비를 절감해보세요. "
+        user_sim_matrix = cosine_similarity(df_scaled_chunk, product_centroids)
+        # 유사도 : 비즈니스 = 3:7
+        total_scores = user_sim_matrix * 30 
+        total_reasons = np.full((current_chunk_size, num_products), "", dtype='U500')
 
-    # 연령
-    age_masks = {
-        '키즈': (df['age'] <= 12).values,
-        '청소년': ((df['age'] > 12) & (df['age'] <= 18)).values,
-        '유쓰': ((df['age'] > 18) & (df['age'] <= 34)).values,
-        '시니어': (df['age'] >= 65).values
-    }
-    for keyword, user_mask in age_masks.items():
-        prod_mask = np.array([keyword in name for name in p_names])
-        total_scores += np.where(user_mask[:, None] & prod_mask[None, :], 20, 0)
-        total_scores[~user_mask[:, None] & prod_mask[None, :]] = -999
-        total_reasons[user_mask[:, None] & prod_mask[None, :]] += f"{keyword} 고객님을 위한 맞춤 요금제입니다. "
+        # 현재 사용자가 사용하고 있거나 사용하고 있는 거보다 데이터 한도 낮은 상품 제외
+        is_current = df_chunk['current_product_name'].values[:, None] == p_names[None, :]
+        is_lower = df_chunk['current_limit'].values[:, None] > p_limits[None, :]
+        total_scores[is_current | is_lower] = -999
 
-    # 가입 기간 - 15점
-    join_date = pd.to_datetime(df['join_date'])
-    calculation_base_date = datetime(datetime.now().year, 11, 30)
-    tenure_years = (calculation_base_date - join_date).dt.days // 365
+        # 최대 데이터 사용량의 90% 이상 + 가격 2만원 이내 상승 
+        usage_stress = (df_chunk['total_usage_amount'] / df_chunk['current_limit'].replace(0, np.inf)).values > 0.9
+        usage_stress = usage_stress.reshape(-1, 1)
+        price_diff_mask = (p_prices[None, :] > df_chunk['avg_monthly_bill'].values[:, None]) & \
+                        (p_prices[None, :] <= df_chunk['avg_monthly_bill'].values[:, None] + 20000)
+        up_sell_mask = usage_stress & price_diff_mask
+        total_scores += np.where(up_sell_mask, 25, 0)
+        new_reason = "데이터 사용 패턴에 맞춰 한 단계 높은 요금제를 추천합니다. "
+        total_reasons = np.where(up_sell_mask, 
+                                 np.core.defchararray.add(total_reasons, new_reason), 
+                                 total_reasons)
+        
+        # 3인 이상 => db에 lg u+ 결합 상품 추가(U+투게더 결합, 참 쉬운 가족 결합 ,신혼플러스 결합, 참 쉬운 케이블 가족 결합)
+        is_family_prod = np.array([any(k in name for k in ['가족', '결합', '투게더']) for name in p_names])
+        family_user_mask = (df_chunk['household_type'] >= 3).values
+        family_mask = family_user_mask[:, None] & is_family_prod[None, :]
+        total_scores += np.where(family_mask, 20, 0)
+        total_reasons[family_mask] = np.char.add(total_reasons[family_mask], "다인 가구 맞춤 결합 상품으로 통신비를 절감해보세요. ")
 
-    tenure_10_mask = (tenure_years >= 10)
-    tenure_5_mask = (tenure_years >= 5) & (tenure_years < 10)
-    tenure_2_mask = (tenure_years >= 2) & (tenure_years < 5)
+        # 연령
+        age_masks = {
+            '키즈': (df_chunk['age'] <= 12).values,
+            '청소년': ((df_chunk['age'] > 12) & (df_chunk['age'] <= 18)).values,
+            '유쓰': ((df_chunk['age'] > 18) & (df_chunk['age'] <= 34)).values,
+            '시니어': (df_chunk['age'] >= 65).values
+        }
+        for keyword, user_mask in age_masks.items():
+            prod_mask = np.array([keyword in name for name in p_names])
+            combined_mask = user_mask[:, None] & prod_mask[None, :]
+            total_scores += np.where(combined_mask, 20, 0)
+            total_scores[~user_mask[:, None] & prod_mask[None, :]] = -999
+            total_reasons[combined_mask] = np.char.add(total_reasons[combined_mask], f"{keyword} 고객님을 위한 맞춤 요금제입니다. ")
 
-    total_scores += np.where(tenure_10_mask | tenure_5_mask | tenure_2_mask, 15, 0)
-    total_reasons[tenure_5_mask] += "장기 우수 고객님을 위한 전용 혜택입니다. "
-    
-    # 세그먼트 - LOST, RISK, COMMON , LOYAL, vip 
-    is_vip = (df['rfm_type'] == 'VIP').values
-    is_addon_prod = (p_categories == 'ADDON_SERVICE')
+        # 가입 기간 - 15점
+        join_date = pd.to_datetime(df_chunk['join_date'])
+        calculation_base_date = datetime(datetime.now().year, 11, 30)
+        tenure_years = (calculation_base_date - join_date).dt.days // 365
 
-    vip_addon_mask = is_vip[:, None] & is_addon_prod[None, :]
-    total_scores += np.where(vip_addon_mask, 30, 0)
-    total_reasons[vip_addon_mask] += "VIP 고객님을 위한 전용 혜택입니다. "
-    # 일반 고객에게는 저렴한 체험형 부가서비스 추천
-    is_gen_user = ~is_vip
-    is_cheap_addon = is_addon_prod & (p_prices < 5000)
-    gen_addon_mask = is_gen_user[:, None] & is_cheap_addon[None, :]
-    total_scores += np.where(gen_addon_mask, 20, 0)
-    total_reasons[gen_addon_mask] += "부담 없는 가격으로 이용 가능한 인기 부가서비스입니다. "
-    # 위험 고객
-    is_risk = (df['type'] == 'RISK').values
-    is_high_ltv = (df['ltv'] > df['ltv'].quantile(0.8)).values
-    is_cheaper_prod = p_prices[None, :] < df['current_base_price'].values[:, None]
-    is_base_prod = (p_categories == 'BASE')
+        tenure_10_mask = (tenure_years >= 10)
+        tenure_5_mask = (tenure_years >= 5) & (tenure_years < 10)
+        tenure_2_mask = (tenure_years >= 2) & (tenure_years < 5)
 
-    diet_mask = is_risk[:, None] & is_high_ltv[:, None] & is_cheaper_prod & is_base_prod[None, :]
-    total_scores += np.where(diet_mask, 30, 0)
-    total_reasons[diet_mask] += "장기 우수 고객님을 위한 요금 다이어트 제안입니다. "
-    
-    # 연체
-    has_delay = (df['payment_delay_count'] >= 1).values
-    is_lower_bill = p_prices[None, :] < df['avg_monthly_bill'].values[:, None]
+        total_scores += np.where(tenure_10_mask | tenure_5_mask | tenure_2_mask, 15, 0)
+        total_reasons[tenure_5_mask] = np.char.add(total_reasons[tenure_5_mask], "장기 우수 고객님을 위한 전용 혜택입니다. ")
+        
+        # 세그먼트 - LOST, RISK, COMMON , LOYAL, vip 
+        is_vip = (df_chunk['segment'] == 'VIP').values.reshape(-1, 1)
+        is_addon_prod = (p_categories == 'ADDON_SERVICE').reshape(1, -1)
 
-    delay_recom_mask = has_delay[:, None] & is_lower_bill & is_base_prod[None, :]
-    total_scores += np.where(delay_recom_mask, 20, 0)
-    total_reasons[delay_recom_mask] += "가계 통신비 절감을 위한 실속형 요금제입니다. " 
+        vip_addon_mask = (is_vip & is_addon_prod)
+        total_scores += np.where(vip_addon_mask, 30, 0)
+        total_reasons[vip_addon_mask] = np.char.add(total_reasons[vip_addon_mask], "VIP 고객님을 위한 전용 혜택입니다. ")
 
-    # 상담 카테고리 => db에 상품 추가
-    roaming_user_mask = (df['top_consult_category'] == 18).values # 로밍 관련 ID
-    roaming_prod_mask = np.array(['로밍' in name for name in p_names])
-    roaming_mask = roaming_user_mask[:, None] & roaming_prod_mask[None, :]
-    total_scores += np.where(roaming_mask, 50, 0)
-    total_reasons[roaming_mask] += "최근 로밍 상담을 바탕으로 인기 상품을 추천합니다. "
+        # 일반 고객에게는 저렴한 체험형 부가서비스 추천
+        is_gen_user = ~is_vip
+        is_cheap_addon = is_addon_prod & (p_prices < 5000)
+        gen_addon_mask = is_gen_user[:, None] & is_cheap_addon[None, :]
+        total_scores += np.where(gen_addon_mask, 20, 0)
+        total_reasons[gen_addon_mask] = np.char.add(total_reasons[gen_addon_mask], "부담 없는 가격으로 이용 가능한 인기 부가서비스입니다. ")
+        # 위험 고객
+        is_risk = (df_chunk['segment'] == 'RISK').values
+        is_high_ltv = (df_chunk['ltv'] > df_chunk['ltv'].quantile(0.8)).values
+        is_cheaper_prod = p_prices[None, :] < df_chunk['current_base_price'].values[:, None]
+        is_base_prod = (p_categories == 'BASE')
 
-    # is_churn_consult = (df['top_consult_category'] == 19).values # 해지 상담
-    # is_high_churn_score = (df['churn_score'] > 0.8).values
-    # is_retention_target = is_churn_consult | is_high_churn_score
+        diet_mask = is_risk[:, None] & is_high_ltv[:, None] & is_cheaper_prod & is_base_prod[None, :]
+        total_scores += np.where(diet_mask, 30, 0)
+        total_reasons[diet_mask] = np.char.add(total_reasons[diet_mask], "장기 우수 고객님을 위한 요금 다이어트 제안입니다. ")
+        
+        # 연체
+        has_delay = (df_chunk['payment_delay_count'] >= 1).values
+        is_lower_bill = p_prices[None, :] < df_chunk['avg_monthly_bill'].values[:, None]
 
-    # retention_mask = is_retention_target[:, None] & (p_prices[None, :] < 50000) & is_base_prod[None, :]
-    # total_scores += np.where(retention_mask, 40, 0)
-    # total_reasons[retention_mask] += "고객님을 위한 특별 할인 요금제와 혜택을 확인해보세요. "
+        delay_recom_mask = has_delay[:, None] & is_lower_bill & is_base_prod[None, :]
+        total_scores += np.where(delay_recom_mask, 20, 0)
+        total_reasons[delay_recom_mask] = np.char.add(total_reasons[delay_recom_mask], "가계 통신비 절감을 위한 실속형 요금제입니다. ")
 
-    user_indices, prod_indices = np.where(total_scores >= 30)
-    if len(user_indices) == 0: return "추천 조건에 맞는 항목이 없습니다."
-    
-    final_res = pd.DataFrame({
-        'member_id': df['member_id'].values[user_indices],
-        'product_name': p_names[prod_indices],
-        'price': p_prices[prod_indices],
-        'score': total_scores[user_indices, prod_indices],
-        'reason': total_reasons[user_indices, prod_indices]
-    })
+        # 상담 카테고리 => db에 상품 추가
+        roaming_user_mask = (df_chunk['top_consult_category'] == 18).values # 로밍 관련 ID
+        roaming_prod_mask = np.array(['로밍' in name for name in p_names])
+        roaming_mask = roaming_user_mask[:, None] & roaming_prod_mask[None, :]
+        total_scores += np.where(roaming_mask, 50, 0)
+        total_reasons[roaming_mask] = np.char.add(total_reasons[roaming_mask], "최근 로밍 상담을 바탕으로 인기 상품을 추천합니다. ")
 
-    final_res['rank'] = final_res.groupby('member_id')['score'].rank(ascending=False, method='first').astype(int)
-    result_snapshot = final_res[final_res['rank'] <= 3]
-    result_snapshot.to_sql('recommend_snapshot', con=analysis_engine, if_exists='replace', index=False)
-    return f"{len(result_snapshot)}개 성공"
+        # is_churn_consult = (df_chunk['top_consult_category'] == 19).values # 해지 상담
+        # is_high_churn_score = (df_chunk['churn_score'] > 0.8).values
+        # is_retention_target = is_churn_consult | is_high_churn_score
+
+        # retention_mask = is_retention_target[:, None] & (p_prices[None, :] < 50000) & is_base_prod[None, :]
+        # total_scores += np.where(retention_mask, 40, 0)
+        # total_reasons[retention_mask] = np.char.add(total_reasons[retention_mask], "고객님을 위한 특별 할인 요금제와 혜택을 확인해보세요. ")
+
+        user_indices, prod_indices = np.where(total_scores >= 30)
+        if len(user_indices) == 0: return "추천 조건에 맞는 항목이 없습니다."
+        
+        final_res = pd.DataFrame({
+            'member_id': df_chunk['member_id'].values[user_indices],
+            'product_name': p_names[prod_indices],
+            'price': p_prices[prod_indices],
+            'score': total_scores[user_indices, prod_indices],
+            'reason': total_reasons[user_indices, prod_indices]
+        })
+
+        final_res['rank'] = final_res.groupby('member_id')['score'].rank(ascending=False, method='first').astype(int)
+        result_snapshot = final_res[final_res['rank'] <= 3]
+        mode = 'replace' if i == 0 else 'append'
+        result_snapshot.to_sql('recommend_snapshot', con=analysis_engine, if_exists=mode, index=False)
+        
+        if (i // chunk_size) % 10 == 0:
+            print(f"[AI 추천] {end_idx}명 처리 중...")
+
+    return "[AI 추천] 전체 추천 성공"
 
 def get_recommendations(member_id, ojo_engine):
     query = """

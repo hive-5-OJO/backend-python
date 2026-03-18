@@ -372,17 +372,33 @@ def export_analysis_report():
             summary_df.to_excel(writer, sheet_name='핵심_요약', index=False)
             an_df.to_excel(writer, sheet_name='고객_분석_상세', index=False)
 
+            # [코호트 분석]
             df_cohort = pd.read_sql("SELECT * FROM cohort_snapshot", con=analysis_engine)
             if not df_cohort.empty:
                 df_cohort.to_excel(writer, sheet_name="코호트_분석", index=False)
+            else:
+                pd.DataFrame({"안내": ["코호트 분석 데이터가 아직 수집되지 않았습니다."]}).to_excel(writer, sheet_name="코호트_분석", index=False)
 
+            # [지역별 매출]
             df_region = pd.read_sql("SELECT * FROM region_snapshot", con=analysis_engine)
             if not df_region.empty:
                 df_region.to_excel(writer, sheet_name="지역별_매출", index=False)
+            else:
+                pd.DataFrame({"안내": ["지역별 매출 데이터가 아직 수집되지 않았습니다."]}).to_excel(writer, sheet_name="지역별_매출", index=False)
 
+            # [LTV 분석]
+            df_ltv = pd.read_sql("SELECT * FROM ltv_snapshot", con=analysis_engine)
+            if not df_ltv.empty:
+                df_ltv.to_excel(writer, sheet_name="LTV_분석", index=False)
+            else:
+                pd.DataFrame({"안내": ["LTV 분석 데이터가 아직 수집되지 않았습니다."]}).to_excel(writer, sheet_name="LTV_분석", index=False)
+
+            # [요금제 이탈률]
             df_churn = pd.read_sql("SELECT * FROM churn_snapshot", con=analysis_engine)
             if not df_churn.empty:
                 df_churn.to_excel(writer, sheet_name="요금제_이탈률", index=False)
+            else:
+                pd.DataFrame({"안내": ["요금제 이탈률 데이터가 아직 수집되지 않았습니다."]}).to_excel(writer, sheet_name="요금제_이탈률", index=False)
 
         output.seek(0)
 

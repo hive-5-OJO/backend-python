@@ -148,13 +148,17 @@ def run_analysis_pipeline():
             analysis_final_df['type'] = analysis_final_df['type'].fillna('일반')
             analysis_final_df['lifecycle_stage'] = analysis_final_df['lifecycle_stage'].fillna('ACTIVE')
             analysis_final_df['created_at'] = datetime.now()
+            analysis_final_df['r_score'] = analysis_final_df['r_score'].fillna(0)
+            analysis_final_df['f_score'] = analysis_final_df['f_score'].fillna(0)
+            analysis_final_df['m_score'] = analysis_final_df['m_score'].fillna(0) 
 
             analysis_final_df[[
-                'member_id', 'ltv', 'rfm_score', 'type', 'lifecycle_stage', 'created_at'
+                'member_id', 'ltv', 'rfm_score', 'type', 'lifecycle_stage', 'created_at', 
+                'r_score', 'f_score', 'm_score'
             ]].to_sql(
                 'analysis',
                 con=analysis_engine,
-                if_exists='replace',
+                if_exists='replace', 
                 index=True,
                 index_label='analysis_id'
             )
@@ -163,11 +167,12 @@ def run_analysis_pipeline():
 
             # 마이그레이션 적용 필요
             analysis_final_df[[
-                'member_id', 'ltv', 'rfm_score', 'type', 'lifecycle_stage', 'created_at'
+                'member_id', 'ltv', 'rfm_score', 'type', 'lifecycle_stage', 'created_at',
+                'r_score', 'f_score', 'm_score'
             ]].to_sql(
                 'analysis',
                 con=ojo_engine,
-                if_exists='replace',
+                if_exists='append',
                 index=False
             )
             print("analysis 통합 테이블 적재 성공! (RFM 모델 적용 완료)")
@@ -187,14 +192,13 @@ def run_analysis_pipeline():
     except Exception as e:
         print(f"지역별 분석 중 에러 발생: {e}")
 
-
     # 7. 맞춤 추천
-    try:
-        print("[AI 추천] 고객별 맞춤 상품 추천 계산 시작...")
-        get_all_recommendations(ojo_engine, analysis_engine) 
-        print("[AI 추천] 추천 결과 스냅샷(recommend_snapshot) 적재 완료")
-    except Exception as e:
-        print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")
+    # try:
+    #     print("[AI 추천] 고객별 맞춤 상품 추천 계산 시작...")
+    #     get_all_recommendations(ojo_engine, analysis_engine) 
+    #     print("[AI 추천] 추천 결과 스냅샷(recommend_snapshot) 적재 완료")
+    # except Exception as e:
+    #     print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")
 
     end_time = time.time()
     duration = end_time - start_time
@@ -210,16 +214,13 @@ def clean_df(df):
     return df.where(pd.notnull(df), None).to_dict(orient='records')
 
 @app.get("/api/analysis/make")
-# async def make_analysis(background_tasks: BackgroundTasks):
-#     background_tasks.add_task(run_analysis_pipeline)
+async def make_analysis(background_tasks: BackgroundTasks):
+    background_tasks.add_task(run_analysis_pipeline)
 
-#     return {
-#         "status": "started",
-#         "message": "다차원 분석 및 스냅샷 적재를 백그라운드에서 안전하게 시작합니다."
-#     }
-async def make_analysis(): 
-    run_analysis_pipeline() 
-    return {"status": "success", "message": "분석 완료"}
+    return {
+        "status": "started",
+        "message": "다차원 분석 및 스냅샷 적재를 백그라운드에서 안전하게 시작합니다."
+    }
 
 
 # 조회 API

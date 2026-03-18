@@ -146,16 +146,20 @@ def run_analysis_pipeline():
             )
 
             analysis_final_df['rfm_score'] = analysis_final_df['rfm_score'].fillna(0)
-            analysis_final_df['type'] = analysis_final_df['type'].fillna('일반')
+            analysis_final_df['type'] = analysis_final_df['type'].fillna('COMMON')
             analysis_final_df['lifecycle_stage'] = analysis_final_df['lifecycle_stage'].fillna('ACTIVE')
             analysis_final_df['created_at'] = datetime.now()
+            analysis_final_df['r_score'] = analysis_final_df['r_score'].fillna(0)
+            analysis_final_df['f_score'] = analysis_final_df['f_score'].fillna(0)
+            analysis_final_df['m_score'] = analysis_final_df['m_score'].fillna(0) 
 
             analysis_final_df[[
-                'member_id', 'ltv', 'rfm_score', 'type', 'lifecycle_stage', 'created_at'
+                'member_id', 'ltv', 'rfm_score', 'type', 'lifecycle_stage', 'created_at', 
+                'r_score', 'f_score', 'm_score'
             ]].to_sql(
                 'analysis',
                 con=analysis_engine,
-                if_exists='replace',
+                if_exists='replace', 
                 index=True,
                 index_label='analysis_id'
             )
@@ -164,11 +168,12 @@ def run_analysis_pipeline():
 
             # 마이그레이션 적용 필요
             analysis_final_df[[
-                'member_id', 'ltv', 'rfm_score', 'type', 'lifecycle_stage', 'created_at'
+                'member_id', 'ltv', 'rfm_score', 'type', 'lifecycle_stage', 'created_at',
+                'r_score', 'f_score', 'm_score'
             ]].to_sql(
                 'analysis',
                 con=ojo_engine,
-                if_exists='replace',
+                if_exists='append',
                 index=False
             )
             print("analysis 통합 테이블 적재 성공! (RFM 모델 적용 완료)")
@@ -188,14 +193,13 @@ def run_analysis_pipeline():
     except Exception as e:
         print(f"지역별 분석 중 에러 발생: {e}")
 
-
     # 7. 맞춤 추천
-    try:
-        print("[AI 추천] 고객별 맞춤 상품 추천 계산 시작...")
-        get_all_recommendations(ojo_engine, analysis_engine) 
-        print("[AI 추천] 추천 결과 스냅샷(recommend_snapshot) 적재 완료")
-    except Exception as e:
-        print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")
+    # try:
+    #     print("[AI 추천] 고객별 맞춤 상품 추천 계산 시작...")
+    #     get_all_recommendations(ojo_engine, analysis_engine) 
+    #     print("[AI 추천] 추천 결과 스냅샷(recommend_snapshot) 적재 완료")
+    # except Exception as e:
+    #     print(f"[AI 추천] 추천 엔진 실행 중 에러 발생: {e}")
 
     end_time = time.time()
     duration = end_time - start_time
@@ -203,12 +207,6 @@ def run_analysis_pipeline():
     print(f"TOTAL EXECUTION TIME: {duration:.2f} seconds")
 
     print("분석 결과 적재 완료 (ojo_analysis)")
-
-def clean_df(df):
-    if df.empty: return []
-    # NaN은 None으로, Inf는 매우 큰 수나 None으로 교체
-    df = df.replace([np.inf, -np.inf], np.nan)
-    return df.where(pd.notnull(df), None).to_dict(orient='records')
 
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
@@ -218,10 +216,6 @@ async def make_analysis(background_tasks: BackgroundTasks):
         "status": "started",
         "message": "다차원 분석 및 스냅샷 적재를 백그라운드에서 안전하게 시작합니다."
     }
-# async def make_analysis(): 
-#     run_analysis_pipeline() 
-#     return {"status": "success", "message": "분석 완료"}
-
 
 # 조회 API
 @app.get("/api/analysis/ltv/{memberId}")
@@ -281,7 +275,6 @@ async def get_regional_sales():
     except Exception:
         return {"status": "ERROR", "message": "데이터를 불러올 수 없습니다."}
 
-
 # 이탈률 예측
 @app.get("/api/predictions/churn")
 async def get_churn_prediction():
@@ -310,7 +303,6 @@ async def get_churn_prediction():
             "message": str(e)
         }
 
-
 # 맞춤 상품 추천
 @app.get("/api/analysis/recommend/{memberId}")
 def get_member_recommendation(memberId: int):
@@ -326,7 +318,6 @@ def get_member_recommendation(memberId: int):
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
-
 
 # 통합 고객 분석 데이터 조회 (LTV, RFM, 등급, 생애주기)
 @app.get("/api/analysis/customer/{memberId}")
@@ -357,7 +348,7 @@ def get_customer_analysis(memberId: int):
             "message": f"분석 데이터 조회 중 오류 발생: {str(e)}"
         }
     
-    # 엑셀 보고서 다운로드 API
+# 엑셀 보고서 다운로드 API
 @app.get("/api/analysis/report/export")
 def export_analysis_report():
     print("[리포트] 엑셀 보고서 추출 시작...")
@@ -408,8 +399,6 @@ def export_analysis_report():
     except Exception as e:
         print(f"보고서 추출 중 에러: {e}")
         return {"status": "error", "message": f"보고서 생성 중 오류가 발생했습니다: {str(e)}"}
-
-
 
 @app.get("/api/analysis/report/export")
 def export_analysis_report():

@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import io
 from urllib.parse import quote
+from sqlalchemy import text
 
 # 데이터베이스 및 분석 모듈
 import traceback
@@ -205,14 +206,6 @@ def run_analysis_pipeline():
     print("분석 결과 적재 완료 (ojo_analysis)")
     print(f"TOTAL EXECUTION TIME: {duration:.2f} seconds")
 
-    print("분석 결과 적재 완료 (ojo_analysis)")
-
-def clean_df(df):
-    if df.empty: return []
-    # NaN은 None으로, Inf는 매우 큰 수나 None으로 교체
-    df = df.replace([np.inf, -np.inf], np.nan)
-    return df.where(pd.notnull(df), None).to_dict(orient='records')
-
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_analysis_pipeline)
@@ -222,12 +215,12 @@ async def make_analysis(background_tasks: BackgroundTasks):
         "message": "다차원 분석 및 스냅샷 적재를 백그라운드에서 안전하게 시작합니다."
     }
 
-
 # 조회 API
 @app.get("/api/analysis/ltv/{memberId}")
 def get_member_ltv(memberId: str):
+    query = text("SELECT * FROM ltv_snapshot WHERE member_id = :memberId")
     df = pd.read_sql(
-        "SELECT * FROM ltv_snapshot WHERE member_id = :memberId",
+        query, 
         con=analysis_engine,
         params={"memberId": memberId}
     )
@@ -280,7 +273,6 @@ async def get_regional_sales():
     except Exception:
         return {"status": "ERROR", "message": "데이터를 불러올 수 없습니다."}
 
-
 # 이탈률 예측
 @app.get("/api/predictions/churn")
 async def get_churn_prediction():
@@ -309,7 +301,6 @@ async def get_churn_prediction():
             "message": str(e)
         }
 
-
 # 맞춤 상품 추천
 @app.get("/api/analysis/recommend/{memberId}")
 def get_member_recommendation(memberId: int):
@@ -325,7 +316,6 @@ def get_member_recommendation(memberId: int):
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
-
 
 # 통합 고객 분석 데이터 조회 (LTV, RFM, 등급, 생애주기)
 @app.get("/api/analysis/customer/{memberId}")
@@ -356,7 +346,7 @@ def get_customer_analysis(memberId: int):
             "message": f"분석 데이터 조회 중 오류 발생: {str(e)}"
         }
     
-    # 엑셀 보고서 다운로드 API
+# 엑셀 보고서 다운로드 API
 @app.get("/api/analysis/report/export")
 def export_analysis_report():
     print("[리포트] 엑셀 보고서 추출 시작...")
@@ -407,8 +397,6 @@ def export_analysis_report():
     except Exception as e:
         print(f"보고서 추출 중 에러: {e}")
         return {"status": "error", "message": f"보고서 생성 중 오류가 발생했습니다: {str(e)}"}
-
-
 
 @app.get("/api/analysis/report/export")
 def export_analysis_report():

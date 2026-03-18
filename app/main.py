@@ -145,7 +145,7 @@ def run_analysis_pipeline():
             )
 
             analysis_final_df['rfm_score'] = analysis_final_df['rfm_score'].fillna(0)
-            analysis_final_df['type'] = analysis_final_df['type'].fillna('일반')
+            analysis_final_df['type'] = analysis_final_df['type'].fillna('COMMON')
             analysis_final_df['lifecycle_stage'] = analysis_final_df['lifecycle_stage'].fillna('ACTIVE')
             analysis_final_df['created_at'] = datetime.now()
             analysis_final_df['r_score'] = analysis_final_df['r_score'].fillna(0)

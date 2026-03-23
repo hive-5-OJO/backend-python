@@ -206,8 +206,6 @@ def run_analysis_pipeline():
     print("분석 결과 적재 완료 (ojo_analysis)")
     print(f"TOTAL EXECUTION TIME: {duration:.2f} seconds")
 
-    print("분석 결과 적재 완료 (ojo_analysis)")
-
 @app.get("/api/analysis/make")
 async def make_analysis(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_analysis_pipeline)

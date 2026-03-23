@@ -492,6 +492,6 @@ def get_recommendations(member_id, ojo_engine):
 
     # 점수 높은 순 정렬 후 상위 3개
     res = sorted(recommendations, key=lambda x: x['score'], reverse=True)[:3]
-    for idx, rec in enumerate(sorted_recs, start=1):
+    for idx, rec in enumerate(res, start=1):
             rec['rank'] = idx
     return res
